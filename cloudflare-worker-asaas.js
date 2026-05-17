@@ -785,16 +785,21 @@ async function receberWebhook(request, env) {
     }
 
     // ---- Evento de cobrança (boleto) ----
+    // PAYMENT_DELETED = boleto excluído no painel do Asaas → marca CANCELADO
+    // aqui, pra ele sair de "em aberto" automaticamente (sem o botão Cancelar).
     const caminhoDoc = `condominios/${cid}/boletos/${pagamento.id}`;
+    const ehExclusao = body.event === 'PAYMENT_DELETED';
     const fields = {
-      status: { stringValue: String(pagamento.status || 'UNKNOWN') },
+      status: { stringValue: ehExclusao ? 'CANCELADO' : String(pagamento.status || 'UNKNOWN') },
       atualizadoEm: { timestampValue: new Date().toISOString() },
       asaasEvent: { stringValue: String(body.event || '') },
     };
-    if (pagamento.value != null) {
+    if (!ehExclusao && pagamento.value != null) {
       fields.valorPago = { doubleValue: Number(pagamento.value) };
     }
-    const dataPag = pagamento.paymentDate || pagamento.clientPaymentDate || pagamento.confirmedDate;
+    const dataPag = ehExclusao
+      ? null
+      : (pagamento.paymentDate || pagamento.clientPaymentDate || pagamento.confirmedDate);
     if (dataPag) {
       fields.pagoEm = { stringValue: String(dataPag) };
     }
