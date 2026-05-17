@@ -9,6 +9,14 @@ window.SECTION_RENDERERS = window.SECTION_RENDERERS || {};
 // Worker do Asaas (emissão de boletos).
 const WORKER_ASAAS_URL = 'https://drg-garantidora-asaas.zett-romao.workers.dev';
 
+// Token de identidade do usuário logado — exigido pelos endpoints do Worker.
+// Vai no corpo (POST) ou no header Authorization (GET). Lança se sem sessão.
+async function tokenAtual() {
+  const u = (typeof auth !== 'undefined' && auth && auth.currentUser) ? auth.currentUser : null;
+  if (!u) throw new Error('Sessão expirada — entre novamente.');
+  return u.getIdToken();
+}
+
 let cacheCompetencias = {};
 let fatCtx = null; // contexto carregado ao abrir uma competência (p/ o faturamento)
 
@@ -369,7 +377,9 @@ async function sincronizarBoletos() {
     const b = boletos[i];
     showAlert('comp-status', `Consultando ${i + 1} de ${boletos.length} no Asaas…`, 'info');
     try {
-      const r = await fetch(`${WORKER_ASAAS_URL}/boletos/${encodeURIComponent(b.asaasPaymentId)}`);
+      const r = await fetch(`${WORKER_ASAAS_URL}/boletos/${encodeURIComponent(b.asaasPaymentId)}`, {
+        headers: { 'Authorization': 'Bearer ' + (await tokenAtual()) },
+      });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.success) throw new Error(j.error || 'falha na consulta');
       const bol = j.boleto || {};
@@ -444,6 +454,7 @@ async function faturarCompetencia() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            idToken: await tokenAtual(),
             nome: cond.data.nome, cpfCnpj: cond.data.cpfCnpj,
             email: cond.data.email, telefone: cond.data.telefone, refExterna: cond.id,
           }),
@@ -461,6 +472,7 @@ async function faturarCompetencia() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          idToken: await tokenAtual(),
           customerId, valor, vencimento: ctx.comp.vencimento, descricao,
           multaPct: ctx.regua.multaPct, jurosMesPct: ctx.regua.jurosMoraMesPct,
           refExterna: `garantidora|${ctx.cid}|${ctx.compId}|${uid}`,
@@ -550,6 +562,7 @@ async function emitirHonorario() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          idToken: await tokenAtual(),
           nome: ctx.condominioNome, cpfCnpj: ctx.condominioCnpj,
           email: ctx.condominioEmail, telefone: ctx.condominioTelefone,
           refExterna: ctx.cid,
@@ -568,6 +581,7 @@ async function emitirHonorario() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        idToken: await tokenAtual(),
         customerId, valor, vencimento: venc, descricao,
         refExterna: `garantidora|${ctx.cid}|${ctx.compId}|honorario`,
       }),

@@ -182,6 +182,7 @@ async function repassarViaPix(cid, compId, valor) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        idToken: await tokenAtual(),
         valor,
         pixChave: rep.pixChave,
         pixTipo: rep.pixTipo,
