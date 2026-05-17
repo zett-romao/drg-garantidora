@@ -10,6 +10,9 @@
 //  - conciliar-unidades: casa os rótulos das unidades de uma planilha com
 //    as unidades já cadastradas no sistema.
 //
+// SEGURANÇA: exige um ID token do Firebase válido no corpo (campo idToken) —
+// sem login, 401. Fecha o uso por terceiros (gasto indevido de créditos da IA).
+//
 // COMO ATUALIZAR (passo a passo):
 //  1. https://dash.cloudflare.com → Workers & Pages → drg-garantidora-gemini
 //  2. "Edit code" → apague tudo → cole TODO este arquivo → "Deploy"
@@ -23,6 +26,8 @@ const ALLOWED_ORIGINS = [
   'http://127.0.0.1:5500',
   'https://zett-romao.github.io',
 ];
+
+const FIREBASE_PROJECT_ID = 'drg-garantidora';
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const MAX_BYTES = 15 * 1024 * 1024; // 15 MB
@@ -191,9 +196,9 @@ NÃO inclua nada fora do JSON.`;
 function corsHeaders(origin) {
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
-    'Access-Control-Allow-Origin': allowed,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Origin': allowed,
     'Access-Control-Max-Age': '86400',
   };
 }
@@ -230,6 +235,76 @@ async function chamarGemini(parts, env) {
   }
 }
 
+// =============================================================
+// Autenticação — verifica o ID token do Firebase do usuário logado.
+// =============================================================
+const FIREBASE_JWK_URL =
+  'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
+
+let _firebaseKeys = null; // { mapa: {kid: CryptoKey}, exp }
+
+function b64urlDecode(str) {
+  let s = String(str).replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+async function getFirebaseKeys() {
+  const agora = Date.now();
+  if (_firebaseKeys && _firebaseKeys.exp > agora) return _firebaseKeys.mapa;
+  const res = await fetch(FIREBASE_JWK_URL);
+  if (!res.ok) throw new Error('Falha ao buscar as chaves do Firebase');
+  const data = await res.json();
+  const mapa = {};
+  for (const jwk of (data.keys || [])) {
+    mapa[jwk.kid] = await crypto.subtle.importKey(
+      'jwk', jwk,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false, ['verify'],
+    );
+  }
+  const cc = res.headers.get('Cache-Control') || '';
+  const m = cc.match(/max-age=(\d+)/);
+  const ttl = (m ? parseInt(m[1], 10) : 3600) * 1000;
+  _firebaseKeys = { mapa, exp: agora + ttl };
+  return mapa;
+}
+
+// Verifica um ID token do Firebase. Retorna { uid, email } ou lança.
+async function verificarIdToken(idToken) {
+  if (!idToken) throw new Error('token ausente');
+  const partes = String(idToken).split('.');
+  if (partes.length !== 3) throw new Error('token malformado');
+
+  const header = JSON.parse(new TextDecoder().decode(b64urlDecode(partes[0])));
+  const payload = JSON.parse(new TextDecoder().decode(b64urlDecode(partes[1])));
+  if (header.alg !== 'RS256') throw new Error('algoritmo inválido');
+
+  const keys = await getFirebaseKeys();
+  const key = keys[header.kid];
+  if (!key) throw new Error('chave do token não encontrada');
+
+  const ok = await crypto.subtle.verify(
+    'RSASSA-PKCS1-v1_5', key,
+    b64urlDecode(partes[2]),
+    new TextEncoder().encode(partes[0] + '.' + partes[1]),
+  );
+  if (!ok) throw new Error('assinatura inválida');
+
+  const agora = Math.floor(Date.now() / 1000);
+  if (payload.aud !== FIREBASE_PROJECT_ID) throw new Error('token de outro projeto');
+  if (payload.iss !== 'https://securetoken.google.com/' + FIREBASE_PROJECT_ID) {
+    throw new Error('emissor inválido');
+  }
+  if (!payload.sub) throw new Error('token sem usuário');
+  if (!payload.exp || payload.exp <= agora) throw new Error('token expirado');
+
+  return { uid: payload.sub, email: payload.email || '' };
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
@@ -252,6 +327,13 @@ export default {
       payload = await request.json();
     } catch (e) {
       return json({ error: 'JSON inválido no corpo da requisição' }, 400, origin);
+    }
+
+    // Exige um login Firebase válido (idToken no corpo).
+    try {
+      await verificarIdToken(payload.idToken);
+    } catch (e) {
+      return json({ error: 'Acesso negado: ' + ((e && e.message) || e) }, 401, origin);
     }
 
     try {

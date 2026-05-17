@@ -113,7 +113,7 @@ async function analisarPlanilha() {
     const res = await fetch(WORKER_GEMINI_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modo: 'planilha', cabecalhos: plCabecalhos, amostras: linhas.slice(0, 5) }),
+      body: JSON.stringify({ idToken: await tokenAtual(), modo: 'planilha', cabecalhos: plCabecalhos, amostras: linhas.slice(0, 5) }),
     });
     const jr = await res.json().catch(() => ({}));
     if (!res.ok || !jr.success) throw new Error(jr.error || `erro ${res.status}`);

@@ -298,6 +298,36 @@ async function exigirAuth(corpo, request) {
   return verificarIdToken(idToken);
 }
 
+// Exige que o usuário tenha permissão de faturamento (perfil com
+// permissoes.competencias.editar). Se os perfis ainda não foram criados,
+// cai no tier — equipe D.R. (super_admin/operador_drg) pode faturar.
+// Retorna uma resposta de erro (jsonResp) ou null se autorizado.
+async function exigirFaturamento(auth, env, origin) {
+  if (!env.FIREBASE_SA) {
+    return jsonResp({ error: 'FIREBASE_SA não configurada no Worker' }, 500, origin);
+  }
+  const sa = JSON.parse(env.FIREBASE_SA);
+  const usr = await firestoreGet(sa, `users/${auth.uid}`);
+  if (!usr || usr.ativo === false) {
+    return jsonResp({ error: 'Acesso negado.' }, 403, origin);
+  }
+  const role = usr.role || 'condomino';
+  const perfilId = usr.perfilId || ('seed_' + role);
+  let perfil = await firestoreGet(sa, `perfis/${perfilId}`);
+  if (!perfil) perfil = await firestoreGet(sa, `perfis/seed_${role}`);
+  let permitido;
+  if (perfil && perfil.permissoes) {
+    const perm = perfil.permissoes.competencias;
+    permitido = !!(perm && perm.editar);
+  } else {
+    permitido = (role === 'super_admin' || role === 'operador_drg');
+  }
+  if (!permitido) {
+    return jsonResp({ error: 'Seu perfil não permite emitir cobranças.' }, 403, origin);
+  }
+  return null;
+}
+
 // =============================================================
 // TOTP (Google Authenticator) — RFC 6238, HMAC-SHA1
 // =============================================================
@@ -425,8 +455,11 @@ export default {
 // Cria um cliente (condômino) no Asaas.
 async function criarCustomer(request, env, origin) {
   const p = await request.json();
-  try { await exigirAuth(p, request); }
+  let auth;
+  try { auth = await exigirAuth(p, request); }
   catch (e) { return jsonResp({ error: 'Acesso negado: ' + (e.message || e) }, 401, origin); }
+  const negado = await exigirFaturamento(auth, env, origin);
+  if (negado) return negado;
 
   if (!p.nome || !p.cpfCnpj) {
     return jsonResp({ error: 'Campos obrigatórios: nome, cpfCnpj' }, 400, origin);
@@ -450,8 +483,11 @@ async function criarCustomer(request, env, origin) {
 // Emite um boleto (com Pix) para um cliente.
 async function criarBoleto(request, env, origin) {
   const p = await request.json();
-  try { await exigirAuth(p, request); }
+  let auth;
+  try { auth = await exigirAuth(p, request); }
   catch (e) { return jsonResp({ error: 'Acesso negado: ' + (e.message || e) }, 401, origin); }
+  const negado = await exigirFaturamento(auth, env, origin);
+  if (negado) return negado;
 
   if (!p.customerId || !p.valor || !p.vencimento) {
     return jsonResp({ error: 'Campos obrigatórios: customerId, valor, vencimento' }, 400, origin);

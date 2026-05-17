@@ -93,7 +93,7 @@ async function analisarContratoIA() {
     const res = await fetch(WORKER_GEMINI_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileBase64, mimeType: 'application/pdf' }),
+      body: JSON.stringify({ idToken: await tokenAtual(), fileBase64, mimeType: 'application/pdf' }),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.success) {

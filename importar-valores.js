@@ -135,7 +135,7 @@ async function analisarValores() {
     const r1 = await fetch(WORKER_GEMINI_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modo: 'valores', cabecalhos: ivCabecalhos, amostras: linhas.slice(0, 5) }),
+      body: JSON.stringify({ idToken: await tokenAtual(), modo: 'valores', cabecalhos: ivCabecalhos, amostras: linhas.slice(0, 5) }),
     });
     const j1 = await r1.json().catch(() => ({}));
     if (!r1.ok || !j1.success) throw new Error(j1.error || `erro ${r1.status}`);
@@ -149,7 +149,7 @@ async function analisarValores() {
       const r2 = await fetch(WORKER_GEMINI_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ modo: 'conciliar-unidades', unidades: ivUnidades, planilha: planilhaUnidades() }),
+        body: JSON.stringify({ idToken: await tokenAtual(), modo: 'conciliar-unidades', unidades: ivUnidades, planilha: planilhaUnidades() }),
       });
       const j2 = await r2.json().catch(() => ({}));
       if (!r2.ok || !j2.success) throw new Error(j2.error || `erro ${r2.status}`);
@@ -313,7 +313,7 @@ async function reconciliarValores() {
     const r = await fetch(WORKER_GEMINI_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modo: 'conciliar-unidades', unidades: ivUnidades, planilha: planilhaUnidades() }),
+      body: JSON.stringify({ idToken: await tokenAtual(), modo: 'conciliar-unidades', unidades: ivUnidades, planilha: planilhaUnidades() }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.success) throw new Error(j.error || `erro ${r.status}`);
