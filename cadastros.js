@@ -50,6 +50,15 @@ const INDEXADORES = [
   { id: 'TJSP',  label: 'Tabela Prática do TJSP' },
 ];
 
+// Tipos de chave Pix aceitos pelo Asaas (destino do repasse ao condomínio).
+const PIX_TIPOS = [
+  { id: 'CNPJ',  label: 'CNPJ' },
+  { id: 'CPF',   label: 'CPF' },
+  { id: 'EMAIL', label: 'E-mail' },
+  { id: 'PHONE', label: 'Telefone' },
+  { id: 'EVP',   label: 'Chave aleatória' },
+];
+
 // Faixas padrão de um contrato novo (modelo do contrato de referência).
 const FAIXAS_PADRAO = [
   { apartirDias: 11, encargoPct: 10, aplicaCorrecao: false },
@@ -344,10 +353,14 @@ function abrirFormCondominio(id) {
   const e = c.endereco || {};
   const s = c.sindico || {};
   const r = c.regua || {};
+  const rep = c.repasse || {};
   const num = (v, def) => (v != null ? v : def);
   const faixasIniciais = (r.faixas && r.faixas.length) ? r.faixas : FAIXAS_PADRAO;
   const optsIndexador = INDEXADORES.map((x) =>
     `<option value="${x.id}" ${(r.indexador || 'INPC') === x.id ? 'selected' : ''}>${escapeHtml(x.label)}</option>`
+  ).join('');
+  const optsPixTipo = PIX_TIPOS.map((x) =>
+    `<option value="${x.id}" ${(rep.pixTipo || 'CNPJ') === x.id ? 'selected' : ''}>${escapeHtml(x.label)}</option>`
   ).join('');
   const corpo = `
     <div class="form-row">
@@ -377,6 +390,12 @@ function abrirFormCondominio(id) {
       ${campo('Telefone', inputTexto('f-sind-tel', s.telefone ? maskTelefone(s.telefone) : '', 'oninput="this.value=maskTelefone(this.value)"'))}
       ${campo('E-mail', inputTexto('f-sind-email', s.email))}
     </div>
+    ${separadorForm('Repasse ao condomínio')}
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Chave Pix da conta do condomínio — destino do repasse mensal das cotas. Confira com atenção: é para esta chave que o dinheiro é transferido.</p>
+    <div class="form-row">
+      ${campo('Tipo da chave Pix', `<select id="f-pix-tipo">${optsPixTipo}</select>`)}
+      ${campo('Chave Pix', inputTexto('f-pix-chave', rep.pixChave))}
+    </div>
     ${separadorForm('Régua de cobrança')}
     <p class="muted" style="font-size:12px;margin-bottom:10px;">Regras aplicadas ao boleto vencido do condômino: multa e juros (da convenção) e os encargos crescentes por atraso (do contrato).</p>
     <div class="form-row-3">
@@ -399,9 +418,15 @@ async function salvarCondominio(id) {
   const cnpj = soDigitos(valId('f-cnpj'));
   const sindCpf = soDigitos(valId('f-sind-cpf'));
 
+  const pixTipo = valId('f-pix-tipo') || 'CNPJ';
+  const pixChaveRaw = valId('f-pix-chave');
+  const pixChave = (pixTipo === 'CPF' || pixTipo === 'CNPJ') ? soDigitos(pixChaveRaw) : pixChaveRaw;
+
   if (!nome) { erroModal('Informe o nome do condomínio.'); return; }
   if (cnpj && !isCNPJValid(cnpj)) { erroModal('CNPJ inválido.'); return; }
   if (sindCpf && !isCPFValid(sindCpf)) { erroModal('CPF do síndico inválido.'); return; }
+  if (pixTipo === 'CPF' && pixChave && !isCPFValid(pixChave)) { erroModal('A chave Pix (CPF) é inválida.'); return; }
+  if (pixTipo === 'CNPJ' && pixChave && !isCNPJValid(pixChave)) { erroModal('A chave Pix (CNPJ) é inválida.'); return; }
 
   const dados = {
     nome,
@@ -421,6 +446,7 @@ async function salvarCondominio(id) {
       telefone: soDigitos(valId('f-sind-tel')),
       email: valId('f-sind-email'),
     },
+    repasse: { pixTipo, pixChave },
     descontoPontualidadePct: valNum('f-desconto', 0),
     regua: {
       multaPct: valNum('f-multa', 0),

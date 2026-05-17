@@ -1,11 +1,12 @@
 // =============================================================
 // DRG-Garantidora — Cloudflare Worker: Asaas
 //
-// Faz duas coisas:
+// Faz três coisas:
 //  1) Emite boletos (com Pix) das competências condominiais via Asaas.
-//  2) Recebe o webhook do Asaas e CONCILIA os pagamentos: quando um boleto
-//     é pago / vence / é estornado, atualiza o documento do boleto no
-//     Firestore (coleção condominios/{cid}/boletos/{idDoPagamento}).
+//  2) Transfere os repasses ao condomínio via Pix (API de transferências).
+//  3) Recebe o webhook do Asaas e CONCILIA pagamentos e transferências:
+//     - boleto pago/vencido/estornado → condominios/{cid}/boletos/{idPagamento}
+//     - transferência concluída/falha → condominios/{cid}/competencias/{compId}
 //
 // Usa a conta Asaas da D.R. Global — a mesma já usada no DRG-Rently.
 //
@@ -19,11 +20,14 @@
 //     - Secret   FIREBASE_SA   = o JSON INTEIRO da conta de serviço do Firebase
 //                 (Firebase Console → Configurações do projeto → Contas de
 //                  serviço → "Gerar nova chave privada" → cole o arquivo todo)
+//  4. No painel do Asaas, no webhook já configurado para /webhook, habilite
+//     também os eventos de TRANSFERÊNCIA (TRANSFER_*) — assim o repasse via
+//     Pix é conciliado automaticamente.
 //
 // O FIREBASE_SA é usado só pela conciliação: o worker autentica no Google
-// com essa conta de serviço e atualiza o boleto direto no Firestore.
-// Sem ele, a emissão de boletos continua funcionando — só a baixa
-// automática do pagamento deixa de acontecer.
+// com essa conta de serviço e atualiza o documento direto no Firestore.
+// Sem ele, a emissão de boletos e os repasses continuam funcionando — só a
+// baixa automática (do pagamento e do repasse) deixa de acontecer.
 // =============================================================
 
 const ALLOWED_ORIGINS = [
@@ -175,7 +179,7 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
-    // Webhook do Asaas — o Asaas chama; concilia o pagamento no Firestore.
+    // Webhook do Asaas — o Asaas chama; concilia pagamento/transferência.
     if (path === '/webhook' && request.method === 'POST') {
       return receberWebhook(request, env);
     }
@@ -199,6 +203,9 @@ export default {
       }
       if (path === '/boletos' && request.method === 'POST') {
         return await criarBoleto(request, env, origin);
+      }
+      if (path === '/transferencias' && request.method === 'POST') {
+        return await criarTransferencia(request, env, origin);
       }
       const m = path.match(/^\/boletos\/([^/]+)$/);
       if (m && request.method === 'GET') {
@@ -265,18 +272,50 @@ async function buscarBoleto(id, env, origin) {
   return jsonResp({ success: true, boleto: data }, 200, origin);
 }
 
+// Cria uma transferência (repasse) via Pix para a chave Pix do condomínio.
+// O front envia: valor, pixChave, pixTipo, descricao, refExterna.
+// Pix não-agendado é processado na hora; o Asaas rejeita se faltar saldo.
+async function criarTransferencia(request, env, origin) {
+  const p = await request.json();
+  const valor = Number(p.valor);
+  if (!valor || valor <= 0) {
+    return jsonResp({ error: 'Valor inválido para a transferência' }, 400, origin);
+  }
+  if (!p.pixChave || !p.pixTipo) {
+    return jsonResp({ error: 'Campos obrigatórios: pixChave, pixTipo' }, 400, origin);
+  }
+  const body = {
+    value: valor,
+    pixAddressKey: String(p.pixChave),
+    pixAddressKeyType: String(p.pixTipo),
+    operationType: 'PIX',
+    description: p.descricao || 'Repasse de cotas condominiais',
+    externalReference: p.refExterna || undefined,
+  };
+  Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);
+
+  const res = await asaasFetch(`${asaasBase(env)}/transfers`, env, 'POST', body);
+  const data = await res.json();
+  if (!res.ok) return jsonResp({ error: erroAsaas(data), details: data }, res.status, origin);
+  return jsonResp({ success: true, transferencia: data }, 200, origin);
+}
+
 // =============================================================
-// Webhook do Asaas — conciliação do pagamento no Firestore.
+// Webhook do Asaas — conciliação no Firestore.
+//
+// Recebe DOIS tipos de evento:
+//  - cobrança      (body.payment)  → atualiza o boleto
+//  - transferência (body.transfer) → atualiza o repasse da competência
 //
 // A conta Asaas é compartilhada com o DRG-Rently, então este endpoint
-// recebe eventos dos dois sistemas. Só processamos os boletos cuja
-// externalReference começa com "garantidora" (formato definido na
-// emissão: "garantidora|cid|competenciaId|unidadeId").
+// recebe eventos dos dois sistemas. Só processamos os objetos cuja
+// externalReference começa com "garantidora":
+//  - boleto:        "garantidora|cid|competenciaId|unidadeId"
+//  - transferência: "garantidora|cid|competenciaId|repasse"
 //
 // Importante: este endpoint SEMPRE responde 200 (menos token inválido).
-// Se a conciliação falhar, o erro vai no corpo da resposta e o boleto
-// pode ser conciliado depois pelo botão "Atualizar status dos boletos".
-// Assim o webhook do Asaas nunca entra em estado "Interrompido".
+// Se a conciliação falhar, o erro vai no corpo da resposta — assim o
+// webhook do Asaas nunca entra em estado "Interrompido".
 // =============================================================
 async function receberWebhook(request, env) {
   const ok200 = (obj) => new Response(JSON.stringify(obj), {
@@ -291,12 +330,16 @@ async function receberWebhook(request, env) {
 
   let body;
   try { body = await request.json(); } catch (_) { body = {}; }
-  const pagamento = body.payment || {};
-  const ref = String(pagamento.externalReference || '');
+
+  // O evento é de transferência (body.transfer) ou de cobrança (body.payment).
+  const transferencia = body.transfer || null;
+  const pagamento = body.payment || null;
+  const objeto = transferencia || pagamento || {};
+  const ref = String(objeto.externalReference || '');
   const partes = ref.split('|');
 
-  // Só os boletos da DRG-Garantidora. O resto (ex.: DRG-Rently) é ignorado.
-  if (partes[0] !== 'garantidora' || partes.length < 4 || !pagamento.id) {
+  // Só os eventos da DRG-Garantidora. O resto (ex.: DRG-Rently) é ignorado.
+  if (partes[0] !== 'garantidora' || partes.length < 4 || !objeto.id) {
     return ok200({ received: true, ignorado: true });
   }
   if (!env.FIREBASE_SA) {
@@ -306,8 +349,37 @@ async function receberWebhook(request, env) {
   try {
     const sa = JSON.parse(env.FIREBASE_SA);
     const cid = partes[1];
-    const caminhoDoc = `condominios/${cid}/boletos/${pagamento.id}`;
 
+    // ---- Evento de transferência (repasse via Pix) ----
+    // externalReference = "garantidora|cid|competenciaId|repasse"
+    if (transferencia) {
+      const compId = partes[2];
+      const caminhoDoc = `condominios/${cid}/competencias/${compId}`;
+      const fields = {
+        repasseStatus: { stringValue: String(transferencia.status || 'UNKNOWN') },
+        repasseAtualizadoEm: { timestampValue: new Date().toISOString() },
+        repasseAsaasEvent: { stringValue: String(body.event || '') },
+      };
+      if (transferencia.failReason) {
+        fields.repasseFalhaMotivo = { stringValue: String(transferencia.failReason) };
+      }
+      if (transferencia.effectiveDate) {
+        fields.repasseEfetivadoEm = { stringValue: String(transferencia.effectiveDate) };
+      }
+      if (transferencia.transactionReceiptUrl) {
+        fields.repasseComprovanteUrl = { stringValue: String(transferencia.transactionReceiptUrl) };
+      }
+      const res = await firestoreUpdate(sa, caminhoDoc, fields);
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        return ok200({ received: true, erro: 'Firestore ' + res.status, detalhe: txt.slice(0, 300) });
+      }
+      return ok200({ received: true, conciliado: true, tipo: 'transferencia', status: transferencia.status || null });
+    }
+
+    // ---- Evento de cobrança (boleto) ----
+    // externalReference = "garantidora|cid|competenciaId|unidadeId"
+    const caminhoDoc = `condominios/${cid}/boletos/${pagamento.id}`;
     const fields = {
       status: { stringValue: String(pagamento.status || 'UNKNOWN') },
       atualizadoEm: { timestampValue: new Date().toISOString() },
