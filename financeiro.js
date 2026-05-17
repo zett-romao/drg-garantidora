@@ -2,7 +2,9 @@
 // DRG-Garantidora — financeiro.js
 // Painel Financeiro: visão consolidada da cobrança de um condomínio
 // — cotas faturadas / recebidas / em aberto / vencidas + honorários.
-// Só leitura. Carregado depois de competencias.js.
+// Cada card e cada linha da tabela é clicável e abre o Faturamento &
+// Boletos já filtrado (drill-down). Só leitura.
+// Carregado depois de competencias.js (usa abrirFaturamentoFiltrado).
 // =============================================================
 
 window.SECTION_RENDERERS = window.SECTION_RENDERERS || {};
@@ -14,8 +16,11 @@ function finHojeISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function finCard(label, valor, sub, cor) {
-  return `<div class="stat-card">
+// Card de indicador. Se `onclick` for informado, vira clicável (drill-down).
+function finCard(label, valor, sub, cor, onclick) {
+  const cls = onclick ? 'stat-card clicavel' : 'stat-card';
+  const oc = onclick ? ` onclick="${onclick}" title="Ver os boletos"` : '';
+  return `<div class="${cls}"${oc}>
     <span class="stat-label">${escapeHtml(label)}</span>
     <span class="stat-value"${cor ? ` style="color:${cor};"` : ''}>${escapeHtml(fmtMoeda(valor))}</span>
     ${sub ? `<span class="stat-sub">${escapeHtml(sub)}</span>` : ''}
@@ -25,7 +30,7 @@ function finCard(label, valor, sub, cor) {
 function renderFinanceiro() {
   return renderComContexto(
     'Painel Financeiro',
-    'Visão consolidada da cobrança do condomínio.',
+    'Visão consolidada da cobrança do condomínio. Clique num card ou numa linha para ver os boletos.',
     async (cid) => {
       const [snapB, snapComp] = await Promise.all([
         refSub(cid, 'boletos').get(),
@@ -68,7 +73,7 @@ function renderFinanceiro() {
         .sort((a, z) => (compOrdem[z] || 0) - (compOrdem[a] || 0))
         .map((id) => {
           const pc = porComp[id];
-          return `<tr>
+          return `<tr class="clicavel" onclick="abrirFaturamentoFiltrado('todos','cota','${id}')" title="Ver os boletos desta competência">
             <td>${escapeHtml(compRotulo[id] || '—')}</td>
             <td class="col-num">${escapeHtml(fmtMoeda(pc.faturado))}</td>
             <td class="col-num">${escapeHtml(fmtMoeda(pc.recebido))}</td>
@@ -88,17 +93,17 @@ function renderFinanceiro() {
         <div class="card">
           <h3>Cotas condominiais</h3>
           <div style="${grid}">
-            ${finCard('Faturado', acc.cotaEmit, 'total emitido')}
-            ${finCard('Recebido', acc.cotaReceb, 'cotas pagas', 'var(--success)')}
-            ${finCard('Em aberto', acc.cotaAberto, 'a vencer')}
-            ${finCard('Vencido', acc.cotaVencido, 'inadimplência', 'var(--danger)')}
+            ${finCard('Faturado', acc.cotaEmit, 'total emitido', null, "abrirFaturamentoFiltrado('todos','cota')")}
+            ${finCard('Recebido', acc.cotaReceb, 'cotas pagas', 'var(--success)', "abrirFaturamentoFiltrado('pago','cota')")}
+            ${finCard('Em aberto', acc.cotaAberto, 'a vencer', null, "abrirFaturamentoFiltrado('aberto','cota')")}
+            ${finCard('Vencido', acc.cotaVencido, 'inadimplência', 'var(--danger)', "abrirFaturamentoFiltrado('vencido','cota')")}
           </div>
         </div>
         <div class="card">
           <h3>Honorários da D.R. Global</h3>
           <div style="${grid}">
-            ${finCard('Emitido', acc.honEmit, 'honorários cobrados')}
-            ${finCard('Recebido', acc.honReceb, 'honorários pagos', 'var(--success)')}
+            ${finCard('Emitido', acc.honEmit, 'honorários cobrados', null, "abrirFaturamentoFiltrado('todos','honorario')")}
+            ${finCard('Recebido', acc.honReceb, 'honorários pagos', 'var(--success)', "abrirFaturamentoFiltrado('pago','honorario')")}
           </div>
         </div>
         <div class="card">

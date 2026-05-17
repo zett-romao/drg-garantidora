@@ -1,8 +1,8 @@
 // =============================================================
 // DRG-Garantidora — faturamento.js
 // Faturamento & Boletos: registro de TODOS os boletos emitidos de um
-// condomínio (cotas + honorários), de todas as competências, com filtro
-// por situação. Só leitura — a emissão é feita em Competências.
+// condomínio (cotas + honorários), de todas as competências, com filtros
+// por situação, tipo e competência. Só leitura — a emissão é em Competências.
 // Carregado depois de competencias.js (usa badgeBoleto).
 // =============================================================
 
@@ -10,6 +10,10 @@ window.SECTION_RENDERERS = window.SECTION_RENDERERS || {};
 
 const FAT_PAGO = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'];
 let fatBolCtx = null;
+// Filtros pré-selecionados ao chegar de outra tela (ex.: Painel Financeiro).
+let fatFiltroInicial = null;
+let fatTipoInicial = null;
+let fatCompInicial = null;
 
 function fatHojeISO() {
   const d = new Date();
@@ -20,6 +24,14 @@ function fatSituacao(b) {
   if (FAT_PAGO.indexOf(b.status || 'PENDING') !== -1) return 'pago';
   if (b.vencimento && b.vencimento < fatHojeISO()) return 'vencido';
   return 'aberto';
+}
+
+// Abre o Faturamento & Boletos já filtrado — chamado pelo Painel Financeiro.
+function abrirFaturamentoFiltrado(situacao, tipo, compId) {
+  fatFiltroInicial = situacao || 'todos';
+  fatTipoInicial = tipo || 'todos';
+  fatCompInicial = compId || 'todas';
+  navegarPara('faturamento');
 }
 
 function renderFaturamento() {
@@ -38,20 +50,57 @@ function renderFaturamento() {
       const cond = {};
       snapC.docs.forEach((d) => { cond[d.id] = d.data(); });
       const comp = {};
-      snapComp.docs.forEach((d) => { comp[d.id] = d.data(); });
+      const compOrdem = {};
+      snapComp.docs.forEach((d) => {
+        const c = d.data();
+        comp[d.id] = c;
+        compOrdem[d.id] = (c.ano || 0) * 100 + (c.mes || 0);
+      });
       const boletos = snapB.docs.map((d) => Object.assign({ _id: d.id }, d.data()));
 
       fatBolCtx = { boletos, uni, cond, comp };
+
+      // filtros vindos de outra tela (consumidos uma vez)
+      const fSit = fatFiltroInicial || 'todos';
+      const fTipo = fatTipoInicial || 'todos';
+      const fComp = fatCompInicial || 'todas';
+      fatFiltroInicial = null;
+      fatTipoInicial = null;
+      fatCompInicial = null;
+
+      const sel = (v, atual) => (v === atual ? ' selected' : '');
+      const optsComp = Object.keys(comp)
+        .sort((a, z) => (compOrdem[z] || 0) - (compOrdem[a] || 0))
+        .map((id) => `<option value="${id}"${sel(id, fComp)}>${escapeHtml(rotuloCompetencia(comp[id]))}</option>`)
+        .join('');
+
       document.getElementById('ctx-conteudo').innerHTML = `
         <div class="card">
-          <div class="form-group" style="max-width:240px;margin-bottom:4px;">
-            <label>Filtrar por situação</label>
-            <select id="fat-filtro" onchange="renderTabelaFaturamento()">
-              <option value="todos">Todos</option>
-              <option value="aberto">Em aberto</option>
-              <option value="vencido">Vencidos</option>
-              <option value="pago">Pagos</option>
-            </select>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;">
+            <div class="form-group" style="max-width:220px;margin-bottom:4px;">
+              <label>Situação</label>
+              <select id="fat-filtro" onchange="renderTabelaFaturamento()">
+                <option value="todos"${sel('todos', fSit)}>Todas</option>
+                <option value="aberto"${sel('aberto', fSit)}>Em aberto</option>
+                <option value="vencido"${sel('vencido', fSit)}>Vencidos</option>
+                <option value="pago"${sel('pago', fSit)}>Pagos</option>
+              </select>
+            </div>
+            <div class="form-group" style="max-width:220px;margin-bottom:4px;">
+              <label>Tipo</label>
+              <select id="fat-tipo" onchange="renderTabelaFaturamento()">
+                <option value="todos"${sel('todos', fTipo)}>Cotas + honorários</option>
+                <option value="cota"${sel('cota', fTipo)}>Só cotas</option>
+                <option value="honorario"${sel('honorario', fTipo)}>Só honorários</option>
+              </select>
+            </div>
+            <div class="form-group" style="max-width:240px;margin-bottom:4px;">
+              <label>Competência</label>
+              <select id="fat-comp" onchange="renderTabelaFaturamento()">
+                <option value="todas"${sel('todas', fComp)}>Todas</option>
+                ${optsComp}
+              </select>
+            </div>
           </div>
           <div id="fat-tabela" style="margin-top:14px;"></div>
         </div>`;
@@ -65,13 +114,21 @@ function renderTabelaFaturamento() {
   const alvo = document.getElementById('fat-tabela');
   if (!ctx || !alvo) return;
   const filtro = (($('fat-filtro') || {}).value) || 'todos';
+  const tipo = (($('fat-tipo') || {}).value) || 'todos';
+  const compFiltro = (($('fat-comp') || {}).value) || 'todas';
 
   const lista = ctx.boletos
-    .filter((b) => filtro === 'todos' || fatSituacao(b) === filtro)
+    .filter((b) => {
+      if (filtro !== 'todos' && fatSituacao(b) !== filtro) return false;
+      if (tipo === 'cota' && b.tipo === 'honorario') return false;
+      if (tipo === 'honorario' && b.tipo !== 'honorario') return false;
+      if (compFiltro !== 'todas' && b.competenciaId !== compFiltro) return false;
+      return true;
+    })
     .sort((a, z) => String(z.vencimento || '').localeCompare(String(a.vencimento || '')));
 
   if (!lista.length) {
-    alvo.innerHTML = '<div class="empty-state">Nenhum boleto nesta situação.</div>';
+    alvo.innerHTML = '<div class="empty-state">Nenhum boleto nesta seleção.</div>';
     return;
   }
 
@@ -88,7 +145,7 @@ function renderTabelaFaturamento() {
       ? ` <a href="${escapeHtml(b.invoiceUrl)}" target="_blank" rel="noopener">2ª via</a>` : '';
     return `<tr>
       <td>${escapeHtml(compTxt)}</td>
-      <td>${escapeHtml(destino)}${honorario ? '' : ''}</td>
+      <td>${escapeHtml(destino)}</td>
       <td>${escapeHtml(fmtData(b.vencimento))}</td>
       <td class="col-num">${escapeHtml(fmtMoeda(b.valor))}</td>
       <td>${badgeBoleto(b)}${link}</td>
