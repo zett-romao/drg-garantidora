@@ -264,7 +264,7 @@ async function confirmarAprovacaoRepasse(cid, compId) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.success) throw new Error(j.error || 'falha na aprovação');
     fecharModalForm();
-    renderRepasses();
+    renderSection(State.currentSection);
   } catch (err) {
     const code = err && err.code;
     const msg = (code === 'auth/wrong-password' || code === 'auth/invalid-credential')
@@ -339,3 +339,143 @@ async function desfazerRepasse(cid, compId) {
 }
 
 SECTION_RENDERERS.repasses = renderRepasses;
+
+// =============================================================
+// Painel de Repasses — visão consolidada de TODOS os condomínios.
+// Pro gestor que aprova: junta os repasses de todos os condomínios numa
+// tela só, já filtrada nos que aguardam aprovação. A aprovação reaproveita
+// o mesmo fluxo (senha + Google Authenticator) da tela por condomínio.
+// =============================================================
+let repGeralCtx = null;
+
+async function renderRepassesGeral() {
+  const content = $('content');
+  content.innerHTML = '<div class="loader">Carregando repasses…</div>';
+  try {
+    const snapCond = await refCondominios().get();
+    const conds = snapCond.docs
+      .map((d) => Object.assign({ _id: d.id }, d.data()))
+      .filter((c) => c.ativo !== false);
+
+    const snaps = await Promise.all(
+      conds.map((c) => refSub(c._id, 'competencias').get()),
+    );
+
+    const itens = [];
+    conds.forEach((c, i) => {
+      snaps[i].docs.forEach((d) => {
+        const comp = d.data();
+        const classe = repClassificar(comp);
+        if (classe === 'pendente') return;   // sem repasse lançado — fora do painel
+        itens.push({
+          cid: c._id,
+          condNome: c.nome || '—',
+          condRepasse: c.repasse || {},
+          compId: d.id,
+          comp,
+          classe,
+          valor: comp.repasseValor != null ? comp.repasseValor : 0,
+        });
+      });
+    });
+    repGeralCtx = { itens };
+
+    const nAguardando = itens.filter((it) => it.classe === 'aguardando').length;
+    const filtroInicial = nAguardando ? 'aguardando' : 'todos';
+    const sel = (v) => (v === filtroInicial ? ' selected' : '');
+    const aviso = (pode('aprovarRepasse') && nAguardando)
+      ? `<div class="card" style="border-left:3px solid var(--info,#1D4ED8);">
+           <p class="muted" style="margin:0;font-size:13px;">
+             <strong>${nAguardando} repasse(s) aguardando aprovação</strong> no total.
+             Clique em “Aprovar repasse” na linha — vai pedir sua senha e o código do Google Authenticator.
+           </p></div>`
+      : '';
+
+    content.innerHTML = `
+      <div class="section-head">
+        <div><h2>Painel de Repasses</h2>
+        <p>Repasses de todos os condomínios numa tela só.</p></div>
+      </div>
+      ${aviso}
+      <div class="card">
+        <div class="form-group" style="max-width:240px;margin-bottom:4px;">
+          <label>Situação</label>
+          <select id="repg-filtro" onchange="renderTabelaRepassesGeral()">
+            <option value="todos"${sel('todos')}>Todas</option>
+            <option value="aguardando"${sel('aguardando')}>Aguardando aprovação</option>
+            <option value="ok"${sel('ok')}>Repassados</option>
+            <option value="processando"${sel('processando')}>Processando</option>
+            <option value="falha"${sel('falha')}>Falharam</option>
+          </select>
+        </div>
+        <div id="repg-tabela" style="margin-top:14px;"></div>
+      </div>`;
+    renderTabelaRepassesGeral();
+  } catch (err) {
+    content.innerHTML = cardErro('Falha ao carregar o painel de repasses.', err);
+  }
+}
+
+function renderTabelaRepassesGeral() {
+  const ctx = repGeralCtx;
+  const alvo = document.getElementById('repg-tabela');
+  if (!ctx || !alvo) return;
+  const filtro = (($('repg-filtro') || {}).value) || 'todos';
+  const podeAprov = pode('aprovarRepasse');
+
+  const lista = ctx.itens
+    .filter((it) => filtro === 'todos' || it.classe === filtro)
+    .sort((a, z) => {
+      if (a.classe === 'aguardando' && z.classe !== 'aguardando') return -1;
+      if (z.classe === 'aguardando' && a.classe !== 'aguardando') return 1;
+      return String(z.comp.vencimento || '').localeCompare(String(a.comp.vencimento || ''));
+    });
+
+  if (!lista.length) {
+    alvo.innerHTML = '<div class="empty-state">Nenhum repasse nesta seleção.</div>';
+    return;
+  }
+
+  let total = 0;
+  const linhas = lista.map((it) => {
+    total += Number(it.valor) || 0;
+    const comprov = it.comp.repasseComprovanteUrl
+      ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(it.comp.repasseComprovanteUrl)}" target="_blank" rel="noopener">Comprovante</a>`
+      : '';
+    const aprovar = (it.classe === 'aguardando' && podeAprov)
+      ? `<button class="btn btn-success btn-sm" onclick="abrirAprovacaoGeral('${it.cid}','${it.compId}')">Aprovar repasse</button>`
+      : '';
+    const acao = [aprovar, comprov].filter(Boolean).join(' ')
+      || '<span class="muted" style="font-size:12px;">—</span>';
+    return `<tr>
+      <td>${escapeHtml(it.condNome)}</td>
+      <td>${escapeHtml(rotuloCompetencia(it.comp))}</td>
+      <td class="col-num">${escapeHtml(fmtMoeda(it.valor))}</td>
+      <td>${badgeRepasse(it.comp, it.valor)}</td>
+      <td class="acoes">${acao}</td>
+    </tr>`;
+  }).join('');
+
+  alvo.innerHTML = `
+    <div class="tabela-wrap" style="max-height:480px;overflow-y:auto;">
+      <table class="tabela">
+        <thead><tr><th>Condomínio</th><th>Competência</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead>
+        <tbody>${linhas}</tbody>
+      </table>
+    </div>
+    <p style="margin-top:12px;">${lista.length} repasse(s) · total ${escapeHtml(fmtMoeda(total))}</p>`;
+}
+
+// Aprova a partir do painel consolidado: prepara os globais que o fluxo de
+// aprovação por condomínio espera (repCondominio, repComps) e abre o modal.
+function abrirAprovacaoGeral(cid, compId) {
+  const ctx = repGeralCtx;
+  if (!ctx) return;
+  const it = ctx.itens.find((x) => x.cid === cid && x.compId === compId);
+  if (!it) return;
+  repCondominio = { nome: it.condNome, repasse: it.condRepasse };
+  repComps[compId] = it.comp;
+  abrirAprovacaoRepasse(cid, compId);
+}
+
+SECTION_RENDERERS.repassesGeral = renderRepassesGeral;

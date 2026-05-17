@@ -38,6 +38,7 @@ const MODULOS = {
   cobranca:    { label: 'Régua de Cobrança',        grupo: 'Operação',       fase: 2 },
   conciliacao: { label: 'Conciliação',              grupo: 'Operação',       fase: 2 },
   repasses:    { label: 'Antecipação / Repasses',   grupo: 'Operação',       fase: 3 },
+  repassesGeral: { label: 'Painel de Repasses',     grupo: 'Operação',       fase: 3 },
   financeiro:  { label: 'Painel Financeiro',        grupo: 'Financeiro',     fase: 3 },
   carteira:    { label: 'Carteira Adquirida',       grupo: 'Financeiro',     fase: 3 },
   juridico:    { label: 'Cobrança Judicial',        grupo: 'Financeiro',     fase: 4 },
@@ -73,8 +74,8 @@ const ACOES_PERM = {
 
 // Quais módulos cada perfil enxerga
 const NAV_POR_PERFIL = {
-  super_admin:  ['dashboard','condominios','unidades','condominos','contratos','competencias','faturamento','cobranca','conciliacao','repasses','financeiro','carteira','juridico','calculadora','proposta','gestaoCondominios','usuarios','perfis','auditoria'],
-  operador_drg: ['dashboard','condominios','unidades','condominos','contratos','competencias','faturamento','cobranca','conciliacao','repasses','financeiro','carteira','juridico','calculadora','proposta'],
+  super_admin:  ['dashboard','condominios','unidades','condominos','contratos','competencias','faturamento','cobranca','conciliacao','repasses','repassesGeral','financeiro','carteira','juridico','calculadora','proposta','gestaoCondominios','usuarios','perfis','auditoria'],
+  operador_drg: ['dashboard','condominios','unidades','condominos','contratos','competencias','faturamento','cobranca','conciliacao','repasses','repassesGeral','financeiro','carteira','juridico','calculadora','proposta'],
   sindico:      ['dashboard','condominios','unidades','condominos','faturamento','cobranca','repasses'],
   condomino:    ['dashboard','faturamento'],
 };
