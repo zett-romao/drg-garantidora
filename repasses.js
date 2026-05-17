@@ -117,6 +117,7 @@ function renderRepasses() {
       snapB.docs.forEach((d) => {
         const b = d.data();
         if (b.tipo === 'honorario') return;
+        if (b.status === 'CANCELADO') return;   // boleto cancelado não entra no repasse
         cotaPorComp[b.competenciaId] = (cotaPorComp[b.competenciaId] || 0) + (Number(b.valor) || 0);
       });
 

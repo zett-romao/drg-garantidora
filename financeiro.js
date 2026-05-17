@@ -49,6 +49,7 @@ function renderFinanceiro() {
       const porComp = {};
       snapB.docs.forEach((d) => {
         const b = d.data();
+        if (b.status === 'CANCELADO') return;   // boleto cancelado não conta
         const v = Number(b.valor) || 0;
         const pago = FIN_STATUS_PAGO.indexOf(b.status || 'PENDING') !== -1;
         if (b.tipo === 'honorario') {

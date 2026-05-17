@@ -13,8 +13,8 @@ window.SECTION_RENDERERS = window.SECTION_RENDERERS || {};
 
 let cobCtx = null; // dados carregados ao abrir a seção
 
-// Status de boleto que NÃO entram na cobrança (pago ou estornado).
-const COB_STATUS_FORA = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED'];
+// Status de boleto que NÃO entram na cobrança (pago, estornado ou cancelado).
+const COB_STATUS_FORA = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'CANCELADO'];
 
 // Indexador da régua → código da série no SGS do Banco Central.
 // TJSP não tem API; a Tabela Prática do TJSP corrige pelo IPCA (Lei 14.905/24).
