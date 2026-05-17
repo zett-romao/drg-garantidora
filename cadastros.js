@@ -36,7 +36,11 @@ async function proximoNumeroContrato(cid) {
   }
 }
 
-function podeEditar() { return isEquipe(); }
+// Permite editar o módulo informado (ou a seção atual, se omitido).
+// Delega ao perfil de permissões (pode()); sem perfil, cai no legado.
+function podeEditar(moduloId) {
+  return pode(moduloId || State.currentSection, 'editar');
+}
 
 // =============================================================
 // Régua de cobrança — indexadores e editor de faixas de atraso

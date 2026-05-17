@@ -595,3 +595,43 @@ label.required::after { content: " *"; color: var(--danger); font-weight: 700; }
   .form-row, .form-row-3 { grid-template-columns: 1fr; }
   .content { padding: 16px; }
 }
+
+/* ----- Editor de perfil (Perfis & Permissões) ----- */
+.perfil-grupo-titulo {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--text-muted);
+  margin: 16px 0 8px;
+}
+.perfil-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.perfil-modulo-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  padding: 12px 14px;
+}
+.perfil-modulo-card.ativo {
+  border-color: var(--primary);
+  background: var(--info-light);
+}
+.perfil-modulo-card.perfil-acao { border-style: dashed; }
+.perfil-modulo-titulo {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  margin-bottom: 6px;
+}
+.perfil-check {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text); cursor: pointer;
+  margin-top: 4px;
+}
+.perfil-check input[type="checkbox"] {
+  width: 16px; height: 16px; flex: none; margin: 0;
+  cursor: pointer; accent-color: var(--primary);
+}
+.perfil-check input:disabled { cursor: not-allowed; opacity: 0.7; }
+@media (max-width: 768px) {
+  .perfil-grid { grid-template-columns: 1fr; }
+}

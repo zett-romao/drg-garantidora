@@ -102,9 +102,7 @@ async function sincronizarConciliacao() {
     const b = alvos[i];
     showAlert('conc-status', `Consultando ${i + 1} de ${alvos.length} no Asaas…`, 'info');
     try {
-      const r = await fetch(`${WORKER_ASAAS_URL}/boletos/${encodeURIComponent(b.asaasPaymentId)}`, {
-        headers: { 'Authorization': 'Bearer ' + (await tokenAtual()) },
-      });
+      const r = await fetch(`${WORKER_ASAAS_URL}/boletos/${encodeURIComponent(b.asaasPaymentId)}`);
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.success) throw new Error(j.error || 'falha na consulta');
       const bol = j.boleto || {};

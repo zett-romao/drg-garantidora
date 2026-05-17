@@ -15,6 +15,8 @@ const State = {
   condominioId: null,   // escopo do síndico / condômino
   unidadeId: null,      // escopo do condômino
   condominioSelecionadoId: null, // condomínio em contexto (escolhido pela equipe)
+  perfilId: null,       // id do perfil de permissões (coleção perfis)
+  perfil: null,         // documento do perfil resolvido no login
   currentSection: 'dashboard',
   navHistory: [],       // pilha de seções (botão Voltar)
 };
@@ -43,15 +45,35 @@ const MODULOS = {
   proposta:    { label: 'Simulador de Proposta',    grupo: 'Ferramentas',    fase: 3 },
   gestaoCondominios: { label: 'Gestão de Condomínios', grupo: 'Administração', fase: 2 },
   usuarios:    { label: 'Usuários',                 grupo: 'Administração',  fase: 1 },
+  perfis:      { label: 'Perfis & Permissões',      grupo: 'Administração',  fase: 1 },
   auditoria:   { label: 'Auditoria',                grupo: 'Administração',  fase: 4 },
 };
 
 // Ordem dos grupos no menu lateral
 const ORDEM_GRUPOS = ['Visão Geral', 'Cadastros', 'Operação', 'Financeiro', 'Ferramentas', 'Administração'];
 
+// Módulos que têm a sub-permissão "Editar" no editor de perfil.
+// Os demais módulos do menu são só "Acesso"; o dashboard é sempre liberado.
+const MODULOS_COM_EDITAR = [
+  'condominios', 'unidades', 'condominos', 'contratos', 'competencias',
+  'faturamento', 'cobranca', 'conciliacao', 'repasses', 'carteira',
+  'juridico', 'gestaoCondominios', 'usuarios', 'perfis',
+];
+// Módulos do catálogo que NÃO viram card no editor (ações contextuais —
+// liberadas junto do "Editar" do módulo pai).
+const MODULOS_SEM_CARD = ['importarIA', 'importarPlanilha'];
+// Permissões de ação — cards próprios no editor de perfil, sem "Editar".
+const ACOES_PERM = {
+  aprovarRepasse: {
+    label: 'Aprovar repasse',
+    grupo: 'Operação',
+    descricao: 'Autorizar a transferência do repasse ao condomínio (dinheiro real).',
+  },
+};
+
 // Quais módulos cada perfil enxerga
 const NAV_POR_PERFIL = {
-  super_admin:  ['dashboard','condominios','unidades','condominos','contratos','competencias','faturamento','cobranca','conciliacao','repasses','financeiro','carteira','juridico','calculadora','proposta','gestaoCondominios','usuarios','auditoria'],
+  super_admin:  ['dashboard','condominios','unidades','condominos','contratos','competencias','faturamento','cobranca','conciliacao','repasses','financeiro','carteira','juridico','calculadora','proposta','gestaoCondominios','usuarios','perfis','auditoria'],
   operador_drg: ['dashboard','condominios','unidades','condominos','contratos','competencias','faturamento','cobranca','conciliacao','repasses','financeiro','carteira','juridico','calculadora','proposta'],
   sindico:      ['dashboard','condominios','unidades','condominos','faturamento','cobranca','repasses'],
   condomino:    ['dashboard','faturamento'],
@@ -65,6 +87,63 @@ const ROTULO_PERFIL = {
 };
 
 function isEquipe() { return State.role === 'super_admin' || State.role === 'operador_drg'; }
+
+// =============================================================
+// Perfis de permissão — camada de UI (menu + botões) sobre o tier (role).
+// O tier e as regras do Firestore controlam o acesso ao DADO; o perfil
+// controla o que aparece na tela.
+// =============================================================
+
+// Carrega o perfil do usuário, com fallback: perfilId -> seed_<role> -> null.
+async function carregarPerfil(perfilId, role) {
+  const tentar = async (id) => {
+    try {
+      const d = await db.collection('perfis').doc(id).get();
+      return d.exists ? Object.assign({ _id: d.id }, d.data()) : null;
+    } catch (_) { return null; }
+  };
+  let p = perfilId ? await tentar(perfilId) : null;
+  if (!p && perfilId !== 'seed_' + role) p = await tentar('seed_' + role);
+  return p; // null -> pode() cai no fallback fixo (NAV_POR_PERFIL)
+}
+
+// Módulos que o usuário enxerga no menu — derivado do perfil (ou do fallback).
+function modulosVisiveis() {
+  const p = State.perfil;
+  if (p && p.permissoes) {
+    const liberados = {};
+    Object.keys(p.permissoes).forEach((id) => {
+      if (MODULOS[id] && p.permissoes[id] && p.permissoes[id].acesso) liberados[id] = true;
+    });
+    liberados.dashboard = true; // sempre visível
+    return Object.keys(MODULOS).filter((id) => liberados[id]);
+  }
+  return NAV_POR_PERFIL[State.role] || ['dashboard'];
+}
+
+// Checa permissão. pode('x','acesso') | pode('x','editar') | pode('aprovarRepasse').
+function pode(chave, nivel) {
+  if (chave === 'dashboard') return true;
+  // Piso anti-lockout: o tier super_admin nunca perde as telas de administração.
+  if (State.role === 'super_admin'
+      && (nivel === 'acesso' || nivel === 'editar')
+      && ['perfis', 'usuarios', 'auditoria', 'gestaoCondominios'].indexOf(chave) !== -1) {
+    return true;
+  }
+  const p = State.perfil;
+  if (!p) {
+    // Sem perfil resolvido -> comportamento legado (como antes dos perfis).
+    if (nivel === 'editar') return isEquipe();
+    if (nivel === 'acesso') return (NAV_POR_PERFIL[State.role] || []).indexOf(chave) !== -1;
+    return isEquipe(); // permissão de ação
+  }
+  if (nivel === undefined) {
+    return !!(p.acoes && p.acoes[chave]); // permissão de ação
+  }
+  const m = (p.permissoes && p.permissoes[chave]) || {};
+  if (nivel === 'editar') return !!(m.acesso && m.editar);
+  return !!m.acesso;
+}
 
 // =============================================================
 // Helpers de UI
@@ -342,6 +421,8 @@ async function aoEntrar(user) {
   State.role = doc.role || 'condomino';
   State.condominioId = doc.condominioId || null;
   State.unidadeId = doc.unidadeId || null;
+  State.perfilId = doc.perfilId || ('seed_' + State.role);
+  State.perfil = await carregarPerfil(State.perfilId, State.role);
 
   $('topbar-user-info').textContent = `${doc.nome || user.email} · ${ROTULO_PERFIL[State.role] || State.role}`;
   $('brand-sub').textContent = isEquipe() ? 'Cobrança garantida' : (ROTULO_PERFIL[State.role] || '');
@@ -352,15 +433,15 @@ async function aoEntrar(user) {
 
   // deep-link via ?section=
   const secInicial = new URLSearchParams(location.search).get('section');
-  const permitidas = NAV_POR_PERFIL[State.role] || ['dashboard'];
-  navegarPara(permitidas.includes(secInicial) ? secInicial : 'dashboard', true);
+  const permitidas = modulosVisiveis();
+  navegarPara(permitidas.indexOf(secInicial) !== -1 ? secInicial : 'dashboard', true);
 }
 
 // =============================================================
 // Menu lateral
 // =============================================================
 function renderSidebar() {
-  const ids = NAV_POR_PERFIL[State.role] || ['dashboard'];
+  const ids = modulosVisiveis();
   const porGrupo = {};
   ids.forEach((id) => {
     const m = MODULOS[id];
@@ -392,6 +473,7 @@ function marcarNavAtiva(secId) {
 // =============================================================
 function navegarPara(secId, semHistorico = false) {
   if (!MODULOS[secId]) secId = 'dashboard';
+  if (secId !== 'dashboard' && !pode(secId, 'acesso')) secId = 'dashboard';
   if (!semHistorico && State.currentSection && State.currentSection !== secId) {
     State.navHistory.push(State.currentSection);
   }
@@ -543,6 +625,8 @@ function init() {
       State.user = null;
       State.userDoc = null;
       State.role = null;
+      State.perfilId = null;
+      State.perfil = null;
       State.navHistory = [];
       const btn = $('btn-login');
       if (btn) { btn.disabled = false; btn.textContent = 'Entrar'; }

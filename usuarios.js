@@ -13,12 +13,20 @@ window.SECTION_RENDERERS = window.SECTION_RENDERERS || {};
 
 let cacheUsuarios = {};
 let usuariosCondominios = [];
+let usuariosPerfis = [];   // perfis de permissão disponíveis (coleção perfis)
 
 const PERFIS_USUARIO = ['super_admin', 'operador_drg', 'sindico', 'condomino'];
 
 function perfilOptions(sel) {
   return PERFIS_USUARIO
     .map((r) => `<option value="${r}" ${sel === r ? 'selected' : ''}>${escapeHtml(ROTULO_PERFIL[r] || r)}</option>`)
+    .join('');
+}
+
+function perfilPermOptions(sel) {
+  return ['<option value="">— padrão do tipo de acesso —</option>']
+    .concat(usuariosPerfis.map((p) =>
+      `<option value="${p.id}" ${sel === p.id ? 'selected' : ''}>${escapeHtml(p.nome || p.id)}</option>`))
     .join('');
 }
 
@@ -33,13 +41,17 @@ async function renderUsuarios() {
   const content = $('content');
   content.innerHTML = `<div class="loader">Carregando usuários…</div>`;
   try {
-    const [snapU, conds] = await Promise.all([
+    const [snapU, conds, snapP] = await Promise.all([
       db.collection('users').get(),
       condominiosAtivos(),
+      db.collection('perfis').get().catch(() => ({ docs: [] })),
     ]);
     usuariosCondominios = conds.map((d) => ({ id: d.id, nome: d.data().nome }));
     const condNome = {};
     usuariosCondominios.forEach((c) => { condNome[c.id] = c.nome; });
+    usuariosPerfis = snapP.docs.map((d) => ({ id: d.id, nome: d.data().nome }));
+    const perfilNome = {};
+    usuariosPerfis.forEach((p) => { perfilNome[p.id] = p.nome; });
 
     cacheUsuarios = {};
     const docs = snapU.docs.slice().sort((a, z) =>
@@ -50,10 +62,12 @@ async function renderUsuarios() {
       const st = u.ativo === false
         ? '<span class="badge badge-danger">Inativo</span>'
         : '<span class="badge badge-success">Ativo</span>';
+      const perfilEfetivo = u.perfilId || ('seed_' + (u.role || 'condomino'));
       return `<tr>
         <td>${escapeHtml(u.nome || '—')}</td>
         <td>${escapeHtml(u.email || '—')}</td>
         <td>${escapeHtml(ROTULO_PERFIL[u.role] || u.role || '—')}</td>
+        <td>${escapeHtml(perfilNome[perfilEfetivo] || '—')}</td>
         <td>${escapeHtml(u.condominioId ? (condNome[u.condominioId] || u.condominioId) : '—')}</td>
         <td>${st}</td>
         <td class="acoes"><button class="btn btn-secondary btn-sm" onclick="abrirFormUsuario('${d.id}')">Editar</button></td>
@@ -62,7 +76,7 @@ async function renderUsuarios() {
 
     const tabela = docs.length
       ? `<div class="tabela-wrap"><table class="tabela">
-           <thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Condomínio</th><th>Status</th><th>Ações</th></tr></thead>
+           <thead><tr><th>Nome</th><th>E-mail</th><th>Tipo de acesso</th><th>Perfil</th><th>Condomínio</th><th>Status</th><th>Ações</th></tr></thead>
            <tbody>${linhas}</tbody></table></div>`
       : '<div class="empty-state">Nenhum usuário cadastrado.</div>';
 
@@ -86,7 +100,8 @@ function abrirFormUsuario(uid) {
       ? `${campo('E-mail', '<input type="email" id="usr-email" autocomplete="off">', true)}
          ${campo('Senha provisória', '<input type="text" id="usr-senha" placeholder="mín. 6 caracteres">', true)}`
       : `<div class="form-group"><label>E-mail</label><input type="email" value="${escapeHtml(u.email || '')}" disabled></div>`}
-    ${campo('Perfil', `<select id="usr-perfil">${perfilOptions(u.role)}</select>`, true)}
+    ${campo('Tipo de acesso (tier de segurança)', `<select id="usr-perfil">${perfilOptions(u.role)}</select>`, true)}
+    ${campo('Perfil de permissões', `<select id="usr-perfil-id">${perfilPermOptions(u.perfilId)}</select>`)}
     ${campo('Condomínio (síndico / condômino)', `<select id="usr-cond">${condOptionsUsuario(u.condominioId)}</select>`)}
     ${novo ? '' : `<label class="check-linha"><input type="checkbox" id="usr-ativo" ${u.ativo === false ? '' : 'checked'}> Usuário ativo</label>`}`;
   abrirModalForm(novo ? 'Novo usuário' : 'Editar usuário', corpo, () => salvarUsuario(uid), 'Salvar usuário');
@@ -108,6 +123,7 @@ async function salvarUsuario(uid) {
   const nome = valId('usr-nome');
   const role = valId('usr-perfil');
   const condominioId = valId('usr-cond') || null;
+  const perfilId = valId('usr-perfil-id') || ('seed_' + role);
   if (!nome) { erroModal('Informe o nome.'); return; }
   if ((role === 'sindico' || role === 'condomino') && !condominioId) {
     erroModal('Síndico e condômino precisam de um condomínio vinculado.'); return;
@@ -125,12 +141,12 @@ async function salvarUsuario(uid) {
   try {
     if (uid) {
       await db.collection('users').doc(uid).update({
-        nome, role, condominioId, ativo: valCheck('usr-ativo'),
+        nome, role, condominioId, perfilId, ativo: valCheck('usr-ativo'),
       });
     } else {
       const novoUid = await criarAuthSecundario(email, senha);
       await db.collection('users').doc(novoUid).set(Object.assign({
-        nome, email, role, condominioId, ativo: true,
+        nome, email, role, condominioId, perfilId, ativo: true,
       }, carimboCriacao()));
     }
     fecharModalForm();
