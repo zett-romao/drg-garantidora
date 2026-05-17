@@ -429,6 +429,9 @@ export default {
       if (path === '/boletos' && request.method === 'POST') {
         return await criarBoleto(request, env, origin);
       }
+      if (path === '/cancelar-boleto' && request.method === 'POST') {
+        return await cancelarBoleto(request, env, origin);
+      }
       if (path === '/aprovar-repasse' && request.method === 'POST') {
         return await aprovarRepasse(request, env, origin);
       }
@@ -519,6 +522,29 @@ async function buscarBoleto(id, request, env, origin) {
   const data = await res.json();
   if (!res.ok) return jsonResp({ error: erroAsaas(data), details: data }, res.status, origin);
   return jsonResp({ success: true, boleto: data }, 200, origin);
+}
+
+// Cancela (exclui) um boleto no Asaas. Trata "já inexistente" (404) como
+// sucesso — útil quando o boleto já foi excluído direto no painel do Asaas.
+async function cancelarBoleto(request, env, origin) {
+  const p = await request.json();
+  let auth;
+  try { auth = await exigirAuth(p, request); }
+  catch (e) { return jsonResp({ error: 'Acesso negado: ' + (e.message || e) }, 401, origin); }
+  const negado = await exigirFaturamento(auth, env, origin);
+  if (negado) return negado;
+
+  if (!p.asaasPaymentId) {
+    return jsonResp({ error: 'Campo obrigatório: asaasPaymentId' }, 400, origin);
+  }
+  const res = await asaasFetch(
+    `${asaasBase(env)}/payments/${encodeURIComponent(p.asaasPaymentId)}`, env, 'DELETE',
+  );
+  if (res.ok || res.status === 404) {
+    return jsonResp({ success: true, jaInexistente: res.status === 404 }, 200, origin);
+  }
+  const data = await res.json().catch(() => ({}));
+  return jsonResp({ error: erroAsaas(data), details: data }, res.status, origin);
 }
 
 // =============================================================

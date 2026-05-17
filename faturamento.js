@@ -21,6 +21,7 @@ function fatHojeISO() {
 }
 
 function fatSituacao(b) {
+  if (b.status === 'CANCELADO') return 'cancelado';
   if (FAT_PAGO.indexOf(b.status || 'PENDING') !== -1) return 'pago';
   if (b.vencimento && b.vencimento < fatHojeISO()) return 'vencido';
   return 'aberto';
@@ -58,7 +59,7 @@ function renderFaturamento() {
       });
       const boletos = snapB.docs.map((d) => Object.assign({ _id: d.id }, d.data()));
 
-      fatBolCtx = { boletos, uni, cond, comp };
+      fatBolCtx = { cid, boletos, uni, cond, comp };
 
       // filtros vindos de outra tela (consumidos uma vez)
       const fSit = fatFiltroInicial || 'todos';
@@ -84,6 +85,7 @@ function renderFaturamento() {
                 <option value="aberto"${sel('aberto', fSit)}>Em aberto</option>
                 <option value="vencido"${sel('vencido', fSit)}>Vencidos</option>
                 <option value="pago"${sel('pago', fSit)}>Pagos</option>
+                <option value="cancelado"${sel('cancelado', fSit)}>Cancelados</option>
               </select>
             </div>
             <div class="form-group" style="max-width:220px;margin-bottom:4px;">
@@ -143,23 +145,56 @@ function renderTabelaFaturamento() {
       ? rotuloCompetencia(ctx.comp[b.competenciaId]) : '—';
     const link = b.invoiceUrl
       ? ` <a href="${escapeHtml(b.invoiceUrl)}" target="_blank" rel="noopener">2ª via</a>` : '';
+    const sit = fatSituacao(b);
+    const acaoFat = (podeEditar() && (sit === 'aberto' || sit === 'vencido') && b.asaasPaymentId)
+      ? `<button class="btn btn-danger btn-sm" onclick="cancelarBoletoFat('${b._id}','${b.asaasPaymentId}')">Cancelar</button>`
+      : '';
     return `<tr>
       <td>${escapeHtml(compTxt)}</td>
       <td>${escapeHtml(destino)}</td>
       <td>${escapeHtml(fmtData(b.vencimento))}</td>
       <td class="col-num">${escapeHtml(fmtMoeda(b.valor))}</td>
       <td>${badgeBoleto(b)}${link}</td>
+      <td class="acoes">${acaoFat}</td>
     </tr>`;
   }).join('');
 
   alvo.innerHTML = `
     <div class="tabela-wrap" style="max-height:480px;overflow-y:auto;">
       <table class="tabela">
-        <thead><tr><th>Competência</th><th>Destino</th><th>Vencimento</th><th>Valor</th><th>Situação</th></tr></thead>
+        <thead><tr><th>Competência</th><th>Destino</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Ações</th></tr></thead>
         <tbody>${linhas}</tbody>
       </table>
     </div>
     <p style="margin-top:12px;">${lista.length} boleto(s) · total ${escapeHtml(fmtMoeda(totalValor))}</p>`;
+}
+
+// Cancela um boleto: exclui no Asaas e marca como CANCELADO no Firestore.
+async function cancelarBoletoFat(docId, asaasPaymentId) {
+  const ctx = fatBolCtx;
+  if (!ctx) return;
+  const ok = await confirmar({
+    titulo: 'Cancelar boleto',
+    mensagem: 'Cancelar este boleto? Ele é excluído no Asaas e marcado como cancelado aqui. Não dá pra desfazer.',
+    okLabel: 'Cancelar boleto', perigo: true,
+  });
+  if (!ok) return;
+  try {
+    const r = await fetch(`${WORKER_ASAAS_URL}/cancelar-boleto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken: await tokenAtual(), asaasPaymentId }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.success) throw new Error(j.error || 'falha ao cancelar');
+    await refSub(ctx.cid, 'boletos').doc(docId).update({
+      status: 'CANCELADO',
+      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    renderFaturamento();
+  } catch (err) {
+    alert('Falha ao cancelar: ' + (err.message || err));
+  }
 }
 
 SECTION_RENDERERS.faturamento = renderFaturamento;

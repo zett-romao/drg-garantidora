@@ -49,6 +49,7 @@ function badgeBoleto(b) {
     return `<span class="badge badge-success">Pago${b && b.pagoEm ? ' · ' + fmtData(b.pagoEm) : ''}</span>`;
   }
   if (s === 'OVERDUE') return '<span class="badge badge-danger">Vencido</span>';
+  if (s === 'CANCELADO') return '<span class="badge badge-muted">Cancelado</span>';
   if (s === 'REFUNDED' || s === 'REFUND_REQUESTED') return '<span class="badge badge-muted">Estornado</span>';
   if (s === 'PENDING' || s === 'AWAITING_RISK_ANALYSIS') return '<span class="badge badge-warning">Aguardando</span>';
   return `<span class="badge badge-muted">${escapeHtml(s)}</span>`;

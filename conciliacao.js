@@ -8,7 +8,7 @@
 window.SECTION_RENDERERS = window.SECTION_RENDERERS || {};
 
 const CONC_PAGO = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'];
-const CONC_FINAL = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED'];
+const CONC_FINAL = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH', 'REFUNDED', 'REFUND_REQUESTED', 'CANCELADO'];
 let concCtx = null;
 
 function renderConciliacao() {
@@ -40,8 +40,9 @@ function renderTelaConciliacao() {
   let pagos = 0;
   let pendentes = 0;
   ctx.boletos.forEach((b) => {
-    if (CONC_PAGO.indexOf(b.status || 'PENDING') !== -1) pagos++;
-    else pendentes++;
+    const s = b.status || 'PENDING';
+    if (CONC_PAGO.indexOf(s) !== -1) pagos++;
+    else if (CONC_FINAL.indexOf(s) === -1) pendentes++;
   });
 
   const aSincronizar = ctx.boletos.filter((b) => CONC_FINAL.indexOf(b.status || 'PENDING') === -1);
@@ -53,18 +54,22 @@ function renderTelaConciliacao() {
         ? 'Honorários — condomínio'
         : ((ctx.uni[b.unidadeId] || {}).identificacao || '—');
       const nome = honorario ? '—' : ((ctx.cond[b.condominoId] || {}).nome || '—');
+      const acao = podeEditar()
+        ? `<button class="btn btn-danger btn-sm" onclick="cancelarBoletoConc('${ctx.cid}','${b._id}','${b.asaasPaymentId}')">Cancelar</button>`
+        : '';
       return `<tr>
         <td>${escapeHtml(destino)}</td>
         <td>${escapeHtml(nome)}</td>
         <td>${escapeHtml(fmtData(b.vencimento))}</td>
         <td class="col-num">${escapeHtml(fmtMoeda(b.valor))}</td>
         <td>${badgeBoleto(b)}</td>
+        <td class="acoes">${acao}</td>
       </tr>`;
     }).join('');
 
   const tabela = aSincronizar.length
     ? `<div class="tabela-wrap" style="max-height:420px;overflow-y:auto;"><table class="tabela">
-         <thead><tr><th>Destino</th><th>Condômino</th><th>Vencimento</th><th>Valor</th><th>Status</th></tr></thead>
+         <thead><tr><th>Destino</th><th>Condômino</th><th>Vencimento</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead>
          <tbody>${linhas}</tbody></table></div>`
     : '<div class="empty-state">Todos os boletos já estão num status final (pago ou estornado).</div>';
 
@@ -125,6 +130,32 @@ async function sincronizarConciliacao() {
   const resumo = `${atualizados} boleto(s) atualizado(s).` +
     (falhas.length ? ` ${falhas.length} falha(s): ${falhas.join(' | ')}` : '');
   showAlert('conc-status', resumo, falhas.length ? 'error' : 'success');
+}
+
+// Cancela um boleto: exclui no Asaas e marca como CANCELADO no Firestore.
+async function cancelarBoletoConc(cid, docId, asaasPaymentId) {
+  const ok = await confirmar({
+    titulo: 'Cancelar boleto',
+    mensagem: 'Cancelar este boleto? Ele é excluído no Asaas e marcado como cancelado aqui. Não dá pra desfazer.',
+    okLabel: 'Cancelar boleto', perigo: true,
+  });
+  if (!ok) return;
+  try {
+    const r = await fetch(`${WORKER_ASAAS_URL}/cancelar-boleto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken: await tokenAtual(), asaasPaymentId }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.success) throw new Error(j.error || 'falha ao cancelar');
+    await refSub(cid, 'boletos').doc(docId).update({
+      status: 'CANCELADO',
+      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    renderConciliacao();
+  } catch (err) {
+    showAlert('conc-status', 'Falha ao cancelar: ' + (err.message || err), 'error');
+  }
 }
 
 SECTION_RENDERERS.conciliacao = renderConciliacao;
