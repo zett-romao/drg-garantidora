@@ -1,34 +1,28 @@
 // =============================================================
 // DRG-Garantidora — Cloudflare Worker: Asaas
 //
-// Faz três coisas:
+// Faz:
 //  1) Emite boletos (com Pix) das competências condominiais via Asaas.
-//  2) Transfere os repasses ao condomínio via Pix (API de transferências).
-//  3) Recebe o webhook do Asaas e CONCILIA pagamentos e transferências:
-//     - boleto pago/vencido/estornado → condominios/{cid}/boletos/{idPagamento}
-//     - transferência concluída/falha → condominios/{cid}/competencias/{compId}
+//  2) APROVA repasses: verifica identidade + senha recente + 2FA (Google
+//     Authenticator) + perfil, e só então dispara o Pix ao condomínio.
+//  3) Cadastro/checagem do 2FA (TOTP): /mfa/enroll, /mfa/confirm, /mfa/status.
+//  4) Recebe o webhook do Asaas e CONCILIA pagamentos e transferências.
 //
-// SEGURANÇA: os endpoints chamados pelo site (customers, boletos, boletos/:id,
-// transferencias) exigem um ID token do Firebase válido — sem login, 401.
-// O /webhook usa o WEBHOOK_TOKEN (é o Asaas que chama, não o navegador).
+// SEGURANÇA: os endpoints chamados pelo site exigem um ID token do Firebase
+// válido — sem login, 401. /aprovar-repasse exige, além disso, senha recente
+// (auth_time), código TOTP e o perfil com a ação "aprovar repasse".
+// O /webhook usa o WEBHOOK_TOKEN (é o Asaas que chama).
 //
-// Usa a conta Asaas da D.R. Global — a mesma já usada no DRG-Rently.
-//
-// COMO INSTALAR / ATUALIZAR (passo a passo):
+// COMO INSTALAR / ATUALIZAR:
 //  1. https://dash.cloudflare.com → Workers & Pages → drg-garantidora-asaas
 //  2. "Edit code" → apague tudo → cole TODO este arquivo → "Deploy"
-//  3. Settings → Variables and Secrets → confira/adicione:
-//     - Secret   ASAAS_API_KEY = a chave de API de PRODUÇÃO do Asaas
+//  3. Settings → Variables and Secrets:
+//     - Secret   ASAAS_API_KEY = chave de API de PRODUÇÃO do Asaas
 //     - Variable ASAAS_ENV     = production
-//     - Secret   WEBHOOK_TOKEN = o token do webhook (o mesmo do painel Asaas)
-//     - Secret   FIREBASE_SA   = o JSON INTEIRO da conta de serviço do Firebase
-//                 (Firebase Console → Configurações do projeto → Contas de
-//                  serviço → "Gerar nova chave privada" → cole o arquivo todo)
-//  4. No painel do Asaas, no webhook já configurado para /webhook, habilite
-//     também os eventos de TRANSFERÊNCIA (TRANSFER_*).
-//
-// O FIREBASE_SA é usado só pela conciliação: o worker autentica no Google
-// com essa conta de serviço e atualiza o documento direto no Firestore.
+//     - Secret   WEBHOOK_TOKEN = token do webhook (o mesmo do painel Asaas)
+//     - Secret   FIREBASE_SA   = JSON inteiro da conta de serviço do Firebase
+//  4. No painel do Asaas, no webhook do /webhook, habilite os eventos de
+//     cobrança e de TRANSFERÊNCIA (TRANSFER_*).
 // =============================================================
 
 const ALLOWED_ORIGINS = [
@@ -84,7 +78,7 @@ function erroAsaas(data) {
 }
 
 // =============================================================
-// Conciliação — autenticação no Google + escrita no Firestore (REST)
+// Autenticação no Google + acesso ao Firestore (REST)
 // =============================================================
 
 // Token de acesso do Google, reaproveitado entre requisições do worker.
@@ -168,29 +162,76 @@ async function tokenGoogle(sa) {
   return _tokenCache.token;
 }
 
-// Atualiza (merge) os campos informados de um documento do Firestore.
+function firestoreUrl(sa, caminho) {
+  return `https://firestore.googleapis.com/v1/projects/${sa.project_id}` +
+    `/databases/(default)/documents/${caminho}`;
+}
+
+// Atualiza (merge) os campos informados de um documento — cria se não existir.
 async function firestoreUpdate(sa, caminhoDoc, fields) {
   const token = await tokenGoogle(sa);
   const masks = Object.keys(fields)
     .map((f) => 'updateMask.fieldPaths=' + encodeURIComponent(f))
     .join('&');
-  const url = `https://firestore.googleapis.com/v1/projects/${sa.project_id}` +
-    `/databases/(default)/documents/${caminhoDoc}?${masks}`;
-  return fetch(url, {
+  return fetch(firestoreUrl(sa, caminhoDoc) + '?' + masks, {
     method: 'PATCH',
     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields }),
   });
 }
 
+// Cria um documento numa coleção (id automático).
+async function firestoreCreate(sa, caminhoColecao, fields) {
+  const token = await tokenGoogle(sa);
+  return fetch(firestoreUrl(sa, caminhoColecao), {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields }),
+  });
+}
+
+// Converte um valor do formato REST do Firestore para JS.
+function fsValor(f) {
+  if (!f || typeof f !== 'object') return null;
+  if ('stringValue' in f) return f.stringValue;
+  if ('integerValue' in f) return Number(f.integerValue);
+  if ('doubleValue' in f) return Number(f.doubleValue);
+  if ('booleanValue' in f) return f.booleanValue;
+  if ('timestampValue' in f) return f.timestampValue;
+  if ('nullValue' in f) return null;
+  if ('mapValue' in f) {
+    const o = {};
+    const ff = (f.mapValue && f.mapValue.fields) || {};
+    Object.keys(ff).forEach((k) => { o[k] = fsValor(ff[k]); });
+    return o;
+  }
+  if ('arrayValue' in f) {
+    return ((f.arrayValue && f.arrayValue.values) || []).map(fsValor);
+  }
+  return null;
+}
+
+// Lê um documento do Firestore. Retorna um objeto JS, ou null se não existir.
+async function firestoreGet(sa, caminhoDoc) {
+  const token = await tokenGoogle(sa);
+  const res = await fetch(firestoreUrl(sa, caminhoDoc), {
+    headers: { 'Authorization': 'Bearer ' + token },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('Firestore GET ' + res.status);
+  const data = await res.json();
+  const obj = {};
+  const fields = data.fields || {};
+  Object.keys(fields).forEach((k) => { obj[k] = fsValor(fields[k]); });
+  return obj;
+}
+
 // =============================================================
-// Autenticação — verifica o ID token do Firebase do usuário logado.
-// Sem um login Firebase válido, os endpoints de dinheiro respondem 401.
+// Verificação do ID token do Firebase (login do usuário)
 // =============================================================
 const FIREBASE_JWK_URL =
   'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
 
-// Chaves públicas do Firebase, em cache no escopo do worker.
 let _firebaseKeys = null; // { mapa: {kid: CryptoKey}, exp }
 
 async function getFirebaseKeys() {
@@ -247,8 +288,7 @@ async function verificarIdToken(idToken) {
   return { uid: payload.sub, email: payload.email || '', authTime: payload.auth_time || 0 };
 }
 
-// Extrai e verifica o ID token: do corpo JSON (POST, campo idToken) ou do
-// header Authorization: Bearer (GET). Lança se ausente/inválido.
+// Extrai e verifica o ID token: do corpo JSON (POST) ou do header Authorization.
 async function exigirAuth(corpo, request) {
   let idToken = corpo && corpo.idToken;
   if (!idToken) {
@@ -258,6 +298,74 @@ async function exigirAuth(corpo, request) {
   return verificarIdToken(idToken);
 }
 
+// =============================================================
+// TOTP (Google Authenticator) — RFC 6238, HMAC-SHA1
+// =============================================================
+const BASE32_ALFABETO = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+function base32Encode(bytes) {
+  let bits = 0, valor = 0, out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    valor = (valor << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      out += BASE32_ALFABETO[(valor >> bits) & 31];
+    }
+  }
+  if (bits > 0) out += BASE32_ALFABETO[(valor << (5 - bits)) & 31];
+  return out;
+}
+
+function base32Decode(s) {
+  s = String(s).toUpperCase().replace(/=+$/, '').replace(/\s/g, '');
+  let bits = 0, valor = 0;
+  const out = [];
+  for (let i = 0; i < s.length; i++) {
+    const idx = BASE32_ALFABETO.indexOf(s[i]);
+    if (idx === -1) continue;
+    valor = (valor << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push((valor >> bits) & 0xff);
+    }
+  }
+  return new Uint8Array(out);
+}
+
+// Código TOTP de 6 dígitos para um contador (passo de 30s).
+async function totpCodigo(keyBytes, contador) {
+  const buf = new ArrayBuffer(8);
+  const dv = new DataView(buf);
+  dv.setUint32(0, Math.floor(contador / 0x100000000));
+  dv.setUint32(4, contador >>> 0);
+  const chave = await crypto.subtle.importKey(
+    'raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign'],
+  );
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', chave, buf));
+  const offset = mac[19] & 0x0f;
+  const bin = ((mac[offset] & 0x7f) << 24) | (mac[offset + 1] << 16)
+    | (mac[offset + 2] << 8) | mac[offset + 3];
+  return String(bin % 1000000).padStart(6, '0');
+}
+
+// Verifica um código TOTP (janela de ±1 passo de 30s p/ tolerar relógio).
+async function verificarTotp(secretBase32, code) {
+  code = String(code || '').replace(/\D/g, '');
+  if (code.length !== 6) return false;
+  const key = base32Decode(secretBase32);
+  if (!key.length) return false;
+  const passo = Math.floor(Date.now() / 1000 / 30);
+  for (let d = -1; d <= 1; d++) {
+    if (await totpCodigo(key, passo + d) === code) return true;
+  }
+  return false;
+}
+
+// =============================================================
+// Roteamento
+// =============================================================
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
@@ -267,7 +375,6 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
-    // Webhook do Asaas — o Asaas chama; concilia pagamento/transferência.
     if (path === '/webhook' && request.method === 'POST') {
       return receberWebhook(request, env);
     }
@@ -292,8 +399,17 @@ export default {
       if (path === '/boletos' && request.method === 'POST') {
         return await criarBoleto(request, env, origin);
       }
-      if (path === '/transferencias' && request.method === 'POST') {
-        return await criarTransferencia(request, env, origin);
+      if (path === '/aprovar-repasse' && request.method === 'POST') {
+        return await aprovarRepasse(request, env, origin);
+      }
+      if (path === '/mfa/enroll' && request.method === 'POST') {
+        return await mfaEnroll(request, env, origin);
+      }
+      if (path === '/mfa/confirm' && request.method === 'POST') {
+        return await mfaConfirm(request, env, origin);
+      }
+      if (path === '/mfa/status' && request.method === 'POST') {
+        return await mfaStatus(request, env, origin);
       }
       const m = path.match(/^\/boletos\/([^/]+)$/);
       if (m && request.method === 'GET') {
@@ -369,35 +485,171 @@ async function buscarBoleto(id, request, env, origin) {
   return jsonResp({ success: true, boleto: data }, 200, origin);
 }
 
-// Cria uma transferência (repasse) via Pix para a chave Pix do condomínio.
-// O front envia: idToken, valor, pixChave, pixTipo, descricao, refExterna.
-// Pix não-agendado é processado na hora; o Asaas rejeita se faltar saldo.
-async function criarTransferencia(request, env, origin) {
+// =============================================================
+// APROVAR REPASSE — a trava real do dinheiro.
+// Verifica, em ordem: ID token + senha recente (auth_time) + perfil com
+// "aprovar repasse" + código TOTP + competência aguardando + valor/chave
+// lidos do servidor + aprovador != solicitante. Só então dispara o Pix.
+// =============================================================
+async function aprovarRepasse(request, env, origin) {
   const p = await request.json();
-  try { await exigirAuth(p, request); }
+
+  let auth;
+  try { auth = await verificarIdToken(p.idToken); }
   catch (e) { return jsonResp({ error: 'Acesso negado: ' + (e.message || e) }, 401, origin); }
 
-  const valor = Number(p.valor);
-  if (!valor || valor <= 0) {
-    return jsonResp({ error: 'Valor inválido para a transferência' }, 400, origin);
+  // senha recente: o cliente reautentica e manda um token fresco (auth_time)
+  const agora = Math.floor(Date.now() / 1000);
+  if (!auth.authTime || (agora - auth.authTime) > 300) {
+    return jsonResp({ error: 'Sessão de aprovação expirada — digite a senha novamente.' }, 401, origin);
   }
-  if (!p.pixChave || !p.pixTipo) {
-    return jsonResp({ error: 'Campos obrigatórios: pixChave, pixTipo' }, 400, origin);
+  if (!p.cid || !p.compId) {
+    return jsonResp({ error: 'Campos obrigatórios: cid, compId' }, 400, origin);
   }
-  const body = {
-    value: valor,
-    pixAddressKey: String(p.pixChave),
-    pixAddressKeyType: String(p.pixTipo),
-    operationType: 'PIX',
-    description: p.descricao || 'Repasse de cotas condominiais',
-    externalReference: p.refExterna || undefined,
-  };
-  Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);
+  if (!env.FIREBASE_SA) {
+    return jsonResp({ error: 'FIREBASE_SA não configurada no Worker' }, 500, origin);
+  }
+  const sa = JSON.parse(env.FIREBASE_SA);
 
-  const res = await asaasFetch(`${asaasBase(env)}/transfers`, env, 'POST', body);
+  // perfil do aprovador → ação "aprovar repasse"
+  const usr = await firestoreGet(sa, `users/${auth.uid}`);
+  if (!usr) return jsonResp({ error: 'Usuário não encontrado.' }, 403, origin);
+  if (usr.ativo === false) return jsonResp({ error: 'Acesso desativado.' }, 403, origin);
+  const role = usr.role || 'condomino';
+  const perfilId = usr.perfilId || ('seed_' + role);
+  let perfil = await firestoreGet(sa, `perfis/${perfilId}`);
+  if (!perfil) perfil = await firestoreGet(sa, `perfis/seed_${role}`);
+  const podeAprovar = !!(perfil && perfil.acoes && perfil.acoes.aprovarRepasse);
+  if (!podeAprovar) {
+    return jsonResp({ error: 'Seu perfil não permite aprovar repasses.' }, 403, origin);
+  }
+
+  // 2FA — código TOTP
+  const mfa = await firestoreGet(sa, `mfa/${auth.uid}`);
+  if (!mfa || !mfa.ativo || !mfa.secretBase32) {
+    return jsonResp({ error: 'Configure o 2FA (Google Authenticator) em "Minha conta" antes de aprovar.' }, 403, origin);
+  }
+  if (!(await verificarTotp(mfa.secretBase32, p.totp))) {
+    return jsonResp({ error: 'Código do Google Authenticator inválido.' }, 401, origin);
+  }
+
+  // competência — estado + valor lido do SERVIDOR (não do cliente)
+  const compPath = `condominios/${p.cid}/competencias/${p.compId}`;
+  const comp = await firestoreGet(sa, compPath);
+  if (!comp) return jsonResp({ error: 'Competência não encontrada.' }, 404, origin);
+  if (comp.repasseStatus !== 'AGUARDANDO_APROVACAO') {
+    return jsonResp({ error: 'Esta competência não está aguardando aprovação.' }, 409, origin);
+  }
+  const valor = Number(comp.repasseValor) || 0;
+  if (!(valor > 0)) {
+    return jsonResp({ error: 'Valor do repasse inválido.' }, 409, origin);
+  }
+  if (comp.repasseSolicitadoPor && comp.repasseSolicitadoPor === auth.uid) {
+    return jsonResp({ error: 'Quem solicitou o repasse não pode aprová-lo (separação de funções).' }, 403, origin);
+  }
+
+  // chave Pix do condomínio — lida do SERVIDOR
+  const cond = await firestoreGet(sa, `condominios/${p.cid}`);
+  const rep = (cond && cond.repasse) || {};
+  if (!rep.pixChave || !rep.pixTipo) {
+    return jsonResp({ error: 'O condomínio não tem chave Pix cadastrada.' }, 409, origin);
+  }
+
+  // dispara o Pix no Asaas
+  const asaasBody = {
+    value: valor,
+    pixAddressKey: String(rep.pixChave),
+    pixAddressKeyType: String(rep.pixTipo),
+    operationType: 'PIX',
+    description: 'Repasse de cotas condominiais — ' + ((cond && cond.nome) || p.cid),
+    externalReference: `garantidora|${p.cid}|${p.compId}|repasse`,
+  };
+  const res = await asaasFetch(`${asaasBase(env)}/transfers`, env, 'POST', asaasBody);
   const data = await res.json();
   if (!res.ok) return jsonResp({ error: erroAsaas(data), details: data }, res.status, origin);
+
+  // atualiza a competência
+  const hoje = new Date().toISOString().slice(0, 10);
+  await firestoreUpdate(sa, compPath, {
+    repasseStatus: { stringValue: String(data.status || 'PENDING') },
+    repasseTransferId: { stringValue: String(data.id || '') },
+    repasseEm: { stringValue: hoje },
+    repasseAprovadoPor: { stringValue: auth.uid },
+    repasseAprovadoEmail: { stringValue: auth.email || '' },
+    repasseAprovadoEm: { timestampValue: new Date().toISOString() },
+    repasseComprovanteUrl: { stringValue: String(data.transactionReceiptUrl || '') },
+    repasseFalhaMotivo: { stringValue: '' },
+  });
+
+  // auditoria (gravada pela conta de serviço — passa por cima de write:false)
+  try {
+    await firestoreCreate(sa, 'auditoria', {
+      criadoEm: { timestampValue: new Date().toISOString() },
+      usuario: { stringValue: auth.uid },
+      usuarioEmail: { stringValue: auth.email || '' },
+      acao: { stringValue: 'repasse.aprovado' },
+      detalhe: { stringValue: `Repasse de R$ ${valor.toFixed(2)} aprovado — competência ${p.compId}, condomínio ${(cond && cond.nome) || p.cid}; transferência Asaas ${data.id || '?'}.` },
+    });
+  } catch (_) { /* auditoria não bloqueia o repasse */ }
+
   return jsonResp({ success: true, transferencia: data }, 200, origin);
+}
+
+// =============================================================
+// 2FA — cadastro e checagem do Google Authenticator (TOTP)
+// =============================================================
+async function mfaEnroll(request, env, origin) {
+  const p = await request.json();
+  let auth;
+  try { auth = await verificarIdToken(p.idToken); }
+  catch (e) { return jsonResp({ error: 'Acesso negado: ' + (e.message || e) }, 401, origin); }
+  if (!env.FIREBASE_SA) return jsonResp({ error: 'FIREBASE_SA não configurada no Worker' }, 500, origin);
+  const sa = JSON.parse(env.FIREBASE_SA);
+
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  const secret = base32Encode(bytes);
+  await firestoreUpdate(sa, `mfa/${auth.uid}`, {
+    secretBase32: { stringValue: secret },
+    ativo: { booleanValue: false },
+    criadoEm: { timestampValue: new Date().toISOString() },
+  });
+  const label = encodeURIComponent('DRG-Garantidora:' + (auth.email || auth.uid));
+  const otpauth = `otpauth://totp/${label}?secret=${secret}&issuer=DRG-Garantidora&algorithm=SHA1&digits=6&period=30`;
+  return jsonResp({ success: true, secret, otpauth }, 200, origin);
+}
+
+async function mfaConfirm(request, env, origin) {
+  const p = await request.json();
+  let auth;
+  try { auth = await verificarIdToken(p.idToken); }
+  catch (e) { return jsonResp({ error: 'Acesso negado: ' + (e.message || e) }, 401, origin); }
+  if (!env.FIREBASE_SA) return jsonResp({ error: 'FIREBASE_SA não configurada no Worker' }, 500, origin);
+  const sa = JSON.parse(env.FIREBASE_SA);
+
+  const mfa = await firestoreGet(sa, `mfa/${auth.uid}`);
+  if (!mfa || !mfa.secretBase32) {
+    return jsonResp({ error: 'Inicie o cadastro do 2FA primeiro.' }, 409, origin);
+  }
+  if (!(await verificarTotp(mfa.secretBase32, p.totp))) {
+    return jsonResp({ error: 'Código inválido. Use o código atual mostrado no app.' }, 401, origin);
+  }
+  await firestoreUpdate(sa, `mfa/${auth.uid}`, {
+    ativo: { booleanValue: true },
+    confirmadoEm: { timestampValue: new Date().toISOString() },
+  });
+  return jsonResp({ success: true }, 200, origin);
+}
+
+async function mfaStatus(request, env, origin) {
+  const p = await request.json();
+  let auth;
+  try { auth = await verificarIdToken(p.idToken); }
+  catch (e) { return jsonResp({ error: 'Acesso negado: ' + (e.message || e) }, 401, origin); }
+  if (!env.FIREBASE_SA) return jsonResp({ error: 'FIREBASE_SA não configurada no Worker' }, 500, origin);
+  const sa = JSON.parse(env.FIREBASE_SA);
+
+  const mfa = await firestoreGet(sa, `mfa/${auth.uid}`);
+  return jsonResp({ success: true, ativo: !!(mfa && mfa.ativo) }, 200, origin);
 }
 
 // =============================================================
@@ -407,22 +659,18 @@ async function criarTransferencia(request, env, origin) {
 //  - cobrança      (body.payment)  → atualiza o boleto
 //  - transferência (body.transfer) → atualiza o repasse da competência
 //
-// A conta Asaas é compartilhada com o DRG-Rently, então este endpoint
-// recebe eventos dos dois sistemas. Só processamos os objetos cuja
-// externalReference começa com "garantidora":
+// A conta Asaas é compartilhada com o DRG-Rently — só processamos os
+// objetos cuja externalReference começa com "garantidora":
 //  - boleto:        "garantidora|cid|competenciaId|unidadeId"
 //  - transferência: "garantidora|cid|competenciaId|repasse"
 //
-// Importante: este endpoint SEMPRE responde 200 (menos token inválido).
-// Se a conciliação falhar, o erro vai no corpo da resposta — assim o
-// webhook do Asaas nunca entra em estado "Interrompido".
+// SEMPRE responde 200 (menos token inválido) pra o webhook não "Interromper".
 // =============================================================
 async function receberWebhook(request, env) {
   const ok200 = (obj) => new Response(JSON.stringify(obj), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   });
 
-  // Autentica que é o Asaas chamando (token próprio do webhook).
   const token = request.headers.get('asaas-access-token');
   if (env.WEBHOOK_TOKEN && token !== env.WEBHOOK_TOKEN) {
     return new Response('Unauthorized', { status: 401 });
@@ -431,14 +679,12 @@ async function receberWebhook(request, env) {
   let body;
   try { body = await request.json(); } catch (_) { body = {}; }
 
-  // O evento é de transferência (body.transfer) ou de cobrança (body.payment).
   const transferencia = body.transfer || null;
   const pagamento = body.payment || null;
   const objeto = transferencia || pagamento || {};
   const ref = String(objeto.externalReference || '');
   const partes = ref.split('|');
 
-  // Só os eventos da DRG-Garantidora. O resto (ex.: DRG-Rently) é ignorado.
   if (partes[0] !== 'garantidora' || partes.length < 4 || !objeto.id) {
     return ok200({ received: true, ignorado: true });
   }
@@ -451,7 +697,6 @@ async function receberWebhook(request, env) {
     const cid = partes[1];
 
     // ---- Evento de transferência (repasse via Pix) ----
-    // externalReference = "garantidora|cid|competenciaId|repasse"
     if (transferencia) {
       const compId = partes[2];
       const caminhoDoc = `condominios/${cid}/competencias/${compId}`;
@@ -478,7 +723,6 @@ async function receberWebhook(request, env) {
     }
 
     // ---- Evento de cobrança (boleto) ----
-    // externalReference = "garantidora|cid|competenciaId|unidadeId"
     const caminhoDoc = `condominios/${cid}/boletos/${pagamento.id}`;
     const fields = {
       status: { stringValue: String(pagamento.status || 'UNKNOWN') },

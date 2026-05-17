@@ -1,22 +1,27 @@
 // =============================================================
 // DRG-Garantidora — repasses.js
 // Antecipação / Repasses: a D.R. Global garante e repassa ao condomínio
-// 100% das cotas de cada competência. Este módulo controla, por
-// competência, o valor a repassar e dispara o repasse via Pix (Asaas).
-// Também aceita registro manual (repasse feito por fora do sistema).
+// 100% das cotas de cada competência.
+//
+// Fluxo com separação de funções:
+//  - SOLICITAR (lançar): quem tem "editar" no módulo cria a solicitação —
+//    a competência fica AGUARDANDO_APROVACAO. Não move dinheiro.
+//  - APROVAR: quem tem a ação "aprovar repasse" autoriza com senha +
+//    Google Authenticator. O Pix só sai aí (validado no Worker).
+//  - Registrar manual: nota de repasse feito por fora (não move dinheiro).
 // Carregado depois de competencias.js — usa WORKER_ASAAS_URL e refCondominios.
 // =============================================================
 
 window.SECTION_RENDERERS = window.SECTION_RENDERERS || {};
 
-// Situação do repasse, a partir do status da transferência no Asaas.
+// Situação do repasse, a partir do status gravado na competência.
 const REP_OK = ['DONE', 'MANUAL'];
 const REP_PROCESSANDO = ['PENDING', 'BANK_PROCESSING', 'CREATED'];
 const REP_FALHA = ['FAILED', 'CANCELLED', 'BLOCKED'];
 
 let repCondominio = {};      // { nome, repasse:{pixTipo,pixChave} } do condomínio em contexto
 let repComps = {};           // id -> dados da competência (para os handlers de onclick)
-let repEmAndamento = false;  // trava anti-disparo-duplo durante a transferência
+let repEmAndamento = false;  // trava anti-disparo-duplo na aprovação
 
 function repHojeISO() {
   const d = new Date();
@@ -30,6 +35,7 @@ function rotuloPixTipo(t) {
 // Classifica a situação do repasse de uma competência.
 function repClassificar(c) {
   const st = c.repasseStatus || '';
+  if (st === 'AGUARDANDO_APROVACAO') return 'aguardando';
   if (REP_OK.indexOf(st) !== -1) return 'ok';
   if (REP_PROCESSANDO.indexOf(st) !== -1) return 'processando';
   if (REP_FALHA.indexOf(st) !== -1) return 'falha';
@@ -47,6 +53,9 @@ function badgeRepasse(c, valor) {
   if (classe === 'processando') {
     return '<span class="badge badge-warning">Repassando…</span>';
   }
+  if (classe === 'aguardando') {
+    return '<span class="badge badge-info">Aguardando aprovação</span>';
+  }
   if (classe === 'falha') {
     const motivo = c.repasseFalhaMotivo ? ' · ' + escapeHtml(c.repasseFalhaMotivo) : '';
     return `<span class="badge badge-danger">Falhou${motivo}</span>`;
@@ -57,18 +66,32 @@ function badgeRepasse(c, valor) {
 }
 
 function montarAcoesRepasse(cid, id, c, valor, classe) {
+  const podeLancar = pode('repasses', 'editar');
+  const podeAprov = pode('aprovarRepasse');
+  const comprov = c.repasseComprovanteUrl
+    ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(c.repasseComprovanteUrl)}" target="_blank" rel="noopener">Comprovante</a> `
+    : '';
+
   if (classe === 'ok') {
-    const comp = c.repasseComprovanteUrl
-      ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(c.repasseComprovanteUrl)}" target="_blank" rel="noopener">Comprovante</a> `
-      : '';
-    return comp + `<button class="btn btn-secondary btn-sm" onclick="desfazerRepasse('${cid}','${id}')">Desfazer registro</button>`;
+    if (!podeLancar) return comprov;
+    return comprov + `<button class="btn btn-secondary btn-sm" onclick="desfazerRepasse('${cid}','${id}')">Desfazer registro</button>`;
   }
   if (classe === 'processando') {
-    return '<span class="muted" style="font-size:12px;">aguardando confirmação do Asaas…</span>';
+    return comprov || '<span class="muted" style="font-size:12px;">aguardando confirmação do Asaas…</span>';
   }
-  if (valor > 0) {
-    // pendente ou falha → permite (re)transferir ou registrar manualmente
-    return `<button class="btn btn-success btn-sm" onclick="repassarViaPix('${cid}','${id}',${valor})">Repassar via Pix</button>
+  if (classe === 'aguardando') {
+    let btns = '';
+    if (podeAprov) {
+      btns += `<button class="btn btn-success btn-sm" onclick="abrirAprovacaoRepasse('${cid}','${id}')">Aprovar repasse</button> `;
+    }
+    if (podeLancar) {
+      btns += `<button class="btn btn-secondary btn-sm" onclick="desfazerRepasse('${cid}','${id}')">Cancelar</button>`;
+    }
+    return btns || '<span class="muted" style="font-size:12px;">aguardando aprovação</span>';
+  }
+  // pendente ou falha
+  if (valor > 0 && podeLancar) {
+    return `<button class="btn btn-success btn-sm" onclick="solicitarRepasse('${cid}','${id}',${valor})">Solicitar repasse</button>
             <button class="btn btn-secondary btn-sm" onclick="registrarRepasse('${cid}','${id}',${valor})">Registrar manual</button>`;
   }
   return '';
@@ -103,6 +126,7 @@ function renderRepasses() {
 
       let totalAReprassar = 0;
       let totalRepassado = 0;
+      let nAguardando = 0;
       const semChavePix = !(repCondominio.repasse && repCondominio.repasse.pixChave);
 
       const linhas = comps.map(({ id, c }) => {
@@ -112,14 +136,14 @@ function renderRepasses() {
         const valorRepasse = (c.repasseValor != null ? c.repasseValor : valor);
         if (classe === 'ok' || classe === 'processando') totalRepassado += valorRepasse;
         else totalAReprassar += valor;
+        if (classe === 'aguardando') nAguardando++;
 
-        const acao = podeEditar() ? montarAcoesRepasse(cid, id, c, valor, classe) : '';
         return `<tr>
           <td>${escapeHtml(rotuloCompetencia(c))}</td>
           <td>${escapeHtml(fmtData(c.vencimento))}</td>
           <td class="col-num">${escapeHtml(fmtMoeda(valor))}</td>
           <td>${badgeRepasse(c, valor)}</td>
-          <td class="acoes">${acao}</td>
+          <td class="acoes">${montarAcoesRepasse(cid, id, c, valor, classe)}</td>
         </tr>`;
       }).join('');
 
@@ -129,18 +153,27 @@ function renderRepasses() {
              <tbody>${linhas}</tbody></table></div>`
         : '<div class="empty-state">Nenhuma competência cadastrada.</div>';
 
-      const aviso = (podeEditar() && comps.length && semChavePix)
-        ? `<div class="card" style="border-left:3px solid var(--warning,#d97706);">
+      const avisoAprovar = (pode('aprovarRepasse') && nAguardando)
+        ? `<div class="card" style="border-left:3px solid var(--info,#1D4ED8);">
              <p class="muted" style="margin:0;font-size:13px;">
-               <strong>Sem chave Pix cadastrada.</strong> O repasse via Pix fica indisponível para este condomínio —
-               cadastre em Cadastros → Condomínios → Editar → seção “Repasse ao condomínio”.
-               O registro manual continua disponível.
+               <strong>${nAguardando} repasse(s) aguardando aprovação.</strong>
+               Clique em “Aprovar repasse” na linha — vai pedir sua senha e o código do Google Authenticator.
+             </p>
+           </div>`
+        : '';
+
+      const avisoPix = (pode('repasses', 'editar') && comps.length && semChavePix)
+        ? `<div class="card" style="border-left:3px solid var(--warning,#C2410C);">
+             <p class="muted" style="margin:0;font-size:13px;">
+               <strong>Sem chave Pix cadastrada.</strong> Cadastre em Cadastros → Condomínios → Editar →
+               seção “Repasse ao condomínio” — sem ela o repasse não pode ser aprovado.
              </p>
            </div>`
         : '';
 
       document.getElementById('ctx-conteudo').innerHTML = `
-        ${aviso}
+        ${avisoAprovar}
+        ${avisoPix}
         <div class="card">
           ${tabela}
           ${comps.length ? `<p style="margin-top:12px;">
@@ -152,65 +185,100 @@ function renderRepasses() {
   );
 }
 
-// Dispara a transferência de verdade (Pix via Asaas).
-async function repassarViaPix(cid, compId, valor) {
-  if (repEmAndamento) return;
+// -------------------------------------------------------------
+// Solicitar (lançar) — cria a solicitação; não move dinheiro.
+// -------------------------------------------------------------
+async function solicitarRepasse(cid, compId, valor) {
+  if (!(valor > 0)) { alert('Não há valor a repassar nesta competência.'); return; }
   const rep = repCondominio.repasse || {};
-  if (!rep.pixChave || !rep.pixTipo) {
-    alert('Cadastre a chave Pix do condomínio antes de repassar.\n\n'
-      + 'Vá em Cadastros → Condomínios → Editar → seção "Repasse ao condomínio".');
-    return;
-  }
-  if (!(valor > 0)) {
-    alert('Não há valor a repassar nesta competência.');
-    return;
-  }
+  const semChave = !rep.pixChave || !rep.pixTipo;
   const ok = await confirmar({
-    titulo: 'Repassar via Pix',
-    mensagem: `Transferir agora ${fmtMoeda(valor)} via Pix para a chave `
-      + `${rotuloPixTipo(rep.pixTipo)} "${rep.pixChave}" do condomínio? `
-      + 'Isso movimenta dinheiro de verdade e é irreversível.',
-    okLabel: 'Repassar agora',
-    perigo: true,
+    titulo: 'Solicitar repasse',
+    mensagem: `Criar uma solicitação de repasse de ${fmtMoeda(valor)} ao condomínio? `
+      + 'O dinheiro só sai depois que alguém autorizado aprovar (senha + Google Authenticator).'
+      + (semChave ? ' Atenção: o condomínio ainda não tem chave Pix cadastrada.' : ''),
+    okLabel: 'Solicitar',
   });
-  if (!ok || repEmAndamento) return;
-  repEmAndamento = true;
+  if (!ok) return;
   try {
-    const comp = repComps[compId] || {};
-    const rotulo = rotuloCompetencia(comp);
-    const r = await fetch(`${WORKER_ASAAS_URL}/transferencias`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        idToken: await tokenAtual(),
-        valor,
-        pixChave: rep.pixChave,
-        pixTipo: rep.pixTipo,
-        descricao: `Repasse ${rotulo}${repCondominio.nome ? ' — ' + repCondominio.nome : ''}`,
-        refExterna: `garantidora|${cid}|${compId}|repasse`,
-      }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.success) throw new Error(j.error || 'falha na transferência');
-    const t = j.transferencia || {};
     await refSub(cid, 'competencias').doc(compId).update({
-      repasseEm: repHojeISO(),
+      repasseStatus: 'AGUARDANDO_APROVACAO',
       repasseValor: valor,
-      repasseTransferId: t.id || null,
-      repasseStatus: t.status || 'PENDING',
-      repasseComprovanteUrl: t.transactionReceiptUrl || null,
+      repasseSolicitadoPor: State.user ? State.user.uid : null,
+      repasseSolicitadoEmail: State.user ? State.user.email : null,
+      repasseSolicitadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+      repasseTransferId: null,
+      repasseEm: null,
       repasseEfetivadoEm: null,
       repasseFalhaMotivo: null,
+      repasseComprovanteUrl: null,
     });
     renderRepasses();
   } catch (err) {
-    alert('Falha no repasse via Pix: ' + (err.message || err));
+    alert('Falha ao solicitar: ' + (err.message || err));
+  }
+}
+
+// -------------------------------------------------------------
+// Aprovar — senha + Google Authenticator; o Pix é disparado no Worker.
+// -------------------------------------------------------------
+function abrirAprovacaoRepasse(cid, compId) {
+  const c = repComps[compId] || {};
+  const valor = c.repasseValor != null ? c.repasseValor : 0;
+  const rep = repCondominio.repasse || {};
+  const corpo = `
+    <p>Competência: <strong>${escapeHtml(rotuloCompetencia(c))}</strong></p>
+    <p>Condomínio: <strong>${escapeHtml(repCondominio.nome || '—')}</strong></p>
+    <p>Valor do repasse: <strong>${escapeHtml(fmtMoeda(valor))}</strong></p>
+    <p class="muted" style="font-size:12px;">Destino: chave Pix ${escapeHtml(rotuloPixTipo(rep.pixTipo))} — ${escapeHtml(rep.pixChave || 'não cadastrada')}.</p>
+    ${c.repasseSolicitadoEmail ? `<p class="muted" style="font-size:12px;">Solicitado por ${escapeHtml(c.repasseSolicitadoEmail)}.</p>` : ''}
+    ${campo('Sua senha', '<input type="password" id="aprov-senha" autocomplete="current-password">', true)}
+    ${campo('Código do Google Authenticator', '<input type="text" id="aprov-totp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6 dígitos">', true)}
+    <p class="muted" style="font-size:12px;">Aprovar dispara o Pix de verdade ao condomínio — é irreversível.</p>`;
+  abrirModalForm('Aprovar repasse', corpo, () => confirmarAprovacaoRepasse(cid, compId), 'Aprovar e repassar');
+}
+
+async function confirmarAprovacaoRepasse(cid, compId) {
+  if (repEmAndamento) return;
+  const senha = valId('aprov-senha');
+  const totp = (valId('aprov-totp') || '').replace(/\D/g, '');
+  if (!senha) { erroModal('Informe sua senha.'); return; }
+  if (totp.length !== 6) { erroModal('Informe o código de 6 dígitos do Google Authenticator.'); return; }
+  const user = auth.currentUser;
+  if (!user) { erroModal('Sessão expirada — entre novamente.'); return; }
+
+  repEmAndamento = true;
+  travarSalvar(true);
+  try {
+    // Reautentica (prova a senha) e pega um ID token fresco (auth_time recente).
+    const cred = firebase.auth.EmailAuthProvider.credential(user.email, senha);
+    await user.reauthenticateWithCredential(cred);
+    const idToken = await user.getIdToken(true);
+
+    const r = await fetch(`${WORKER_ASAAS_URL}/aprovar-repasse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken, totp, cid, compId }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.success) throw new Error(j.error || 'falha na aprovação');
+    fecharModalForm();
+    renderRepasses();
+  } catch (err) {
+    const code = err && err.code;
+    const msg = (code === 'auth/wrong-password' || code === 'auth/invalid-credential')
+      ? 'Senha incorreta.'
+      : ((err && err.message) || err);
+    travarSalvar(false, 'Aprovar e repassar');
+    erroModal('Falha: ' + msg);
   } finally {
     repEmAndamento = false;
   }
 }
 
-// Registro manual — quando o repasse foi feito por fora do sistema.
+// -------------------------------------------------------------
+// Registro manual — repasse feito por fora do sistema (não move dinheiro).
+// -------------------------------------------------------------
 function registrarRepasse(cid, compId, valor) {
   const corpo = `
     <p>Valor a repassar ao condomínio: <strong>${escapeHtml(fmtMoeda(valor))}</strong></p>
@@ -243,9 +311,9 @@ async function salvarRepasse(cid, compId, valor) {
 
 async function desfazerRepasse(cid, compId) {
   const ok = await confirmar({
-    titulo: 'Desfazer registro de repasse',
-    mensagem: 'Remove apenas o REGISTRO do repasse desta competência. Se um Pix já foi enviado pelo Asaas, ele NÃO é cancelado — isso afeta só o controle interno.',
-    okLabel: 'Desfazer registro', perigo: true,
+    titulo: 'Desfazer / cancelar repasse',
+    mensagem: 'Remove o registro de repasse desta competência (volta para "a repassar"). Se um Pix já foi enviado pelo Asaas, ele NÃO é cancelado — isso afeta só o controle interno.',
+    okLabel: 'Confirmar', perigo: true,
   });
   if (!ok) return;
   try {
@@ -259,6 +327,9 @@ async function desfazerRepasse(cid, compId) {
       repasseComprovanteUrl: null,
       repasseAsaasEvent: null,
       repasseAtualizadoEm: null,
+      repasseSolicitadoPor: null,
+      repasseSolicitadoEmail: null,
+      repasseSolicitadoEm: null,
     });
     renderRepasses();
   } catch (err) {
