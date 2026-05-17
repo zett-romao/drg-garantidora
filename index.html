@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>DRG-Garantidora — Cobrança Garantida de Condomínios</title>
+  <meta name="description" content="Plataforma de gestão da cobrança garantida de contribuições condominiais: condomínios, boletos, régua de cobrança, antecipação de repasses e painel financeiro.">
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json?v=20260517g">
+  <meta name="theme-color" content="#475569">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="DRG-Garantidora">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="application-name" content="DRG-Garantidora">
+
+  <link rel="icon" type="image/png" href="logo.png?v=20260517g">
+  <link rel="apple-touch-icon" href="logo.png?v=20260517g">
+
+  <link rel="stylesheet" href="styles.css?v=20260517g">
+
+  <!-- Firebase v10.7.1 (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
+  <script src="firebase-config.js?v=20260517g"></script>
+
+  <!-- SheetJS: leitura de planilhas Excel/CSV (importação por IA) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+</head>
+<body>
+
+  <!-- ============================================ -->
+  <!-- Banner: instalar PWA -->
+  <!-- ============================================ -->
+  <div id="pwa-install-banner" class="pwa-install-banner" style="display:none;">
+    <img src="logo.png?v=20260517g" alt="DRG-Garantidora" class="pwa-banner-icon">
+    <div class="pwa-banner-text">
+      <strong>Instale a DRG-Garantidora</strong>
+      <span>Acesso rápido na tela inicial. Funciona como app.</span>
+    </div>
+    <div class="pwa-banner-actions">
+      <button class="btn btn-primary btn-sm" onclick="acionarInstalacaoPWA()">Instalar</button>
+      <button class="btn btn-secondary btn-sm" onclick="fecharBannerInstalar()" title="Fechar">×</button>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- Modal genérico de confirmação -->
+  <!-- ============================================ -->
+  <div id="modal-confirmar" class="modal-confirm-overlay" style="display:none;">
+    <div class="modal-confirm-card" role="dialog" aria-modal="true" aria-labelledby="modal-confirm-titulo">
+      <div class="modal-confirm-icone" id="modal-confirm-icone">!</div>
+      <h3 id="modal-confirm-titulo">Confirmar?</h3>
+      <p id="modal-confirm-mensagem">Tem certeza?</p>
+      <div class="modal-confirm-actions">
+        <button type="button" class="btn btn-secondary" id="btn-modal-confirm-cancelar">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="btn-modal-confirm-ok">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- TELA: Login -->
+  <!-- ============================================ -->
+  <div id="screen-login" class="screen active">
+    <div class="auth-card">
+      <img src="logo.png?v=20260517g" alt="D.R. Global" class="auth-logo">
+      <h1>DRG-Garantidora</h1>
+      <p class="subtitle">Cobrança garantida de contribuições condominiais</p>
+
+      <div id="config-alert" class="alert alert-error" style="display:none;">
+        Firebase ainda não configurado. Edite <strong>firebase-config.js</strong> com os dados do projeto.
+      </div>
+
+      <div id="login-alert" class="alert alert-error" style="display:none;"></div>
+
+      <div class="form-group">
+        <label for="login-email">E-mail</label>
+        <input type="email" id="login-email" autocomplete="email" placeholder="voce@drglobal.com.br">
+      </div>
+
+      <div class="form-group">
+        <label for="login-senha">Senha</label>
+        <div class="password-wrapper">
+          <input type="password" id="login-senha" autocomplete="current-password">
+          <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('login-senha', this)" title="Mostrar/esconder senha" aria-label="Mostrar/esconder senha">Ver</button>
+        </div>
+      </div>
+
+      <a class="forgot-password-link" onclick="abrirEsqueciSenha()">Esqueci minha senha</a>
+
+      <div class="forgot-password-box" id="forgot-password-box" style="display:none;">
+        <label for="forgot-email">E-mail cadastrado</label>
+        <input type="email" id="forgot-email" placeholder="voce@drglobal.com.br" autocomplete="email">
+        <p class="muted" style="font-size:11px; margin-top:6px;">
+          Enviaremos um link pra você redefinir sua senha.
+        </p>
+        <div id="forgot-alert" class="alert" style="display:none; margin-top:10px;"></div>
+        <div class="forgot-actions">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="fecharEsqueciSenha()">Cancelar</button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-enviar-reset" onclick="enviarResetSenha()">Enviar link</button>
+        </div>
+      </div>
+
+      <button id="btn-login" class="btn btn-primary" onclick="login()">Entrar</button>
+
+      <div class="auth-footer">
+        Acesso restrito. Contas são criadas pela equipe D.R. Global.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- TELA: App principal -->
+  <!-- ============================================ -->
+  <div id="screen-app" class="screen">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <img src="logo.png?v=20260517g" alt="" class="brand-logo">
+        <div class="brand-info">
+          <h2>DRG-Garantidora</h2>
+          <div class="brand-sub" id="brand-sub">Cobrança garantida</div>
+        </div>
+      </div>
+      <nav class="sidebar-nav" id="sidebar-nav"><!-- preenchido pelo app.js conforme o perfil --></nav>
+      <div class="sidebar-footer" id="sidebar-footer">DRG-Garantidora</div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="btn-voltar-topbar" id="btn-voltar" onclick="voltarSecao()" disabled>&larr; Voltar</button>
+          <span class="topbar-title" id="topbar-title">Dashboard</span>
+        </div>
+        <div class="topbar-user">
+          <span id="topbar-user-info">—</span>
+          <button class="btn btn-secondary btn-sm" onclick="logout()">Sair</button>
+        </div>
+      </header>
+      <main class="content" id="content"><!-- o app.js renderiza a seção atual aqui --></main>
+    </div>
+  </div>
+
+  <script src="app.js?v=20260517g"></script>
+  <script src="cadastros.js?v=20260517g"></script>
+  <script src="importar-ia.js?v=20260517g"></script>
+  <script src="importar-planilha.js?v=20260517g"></script>
+  <script src="competencias.js?v=20260517g"></script>
+  <script src="importar-valores.js?v=20260517g"></script>
+  <script src="cobranca.js?v=20260517g"></script>
+  <script src="financeiro.js?v=20260517g"></script>
+  <script src="repasses.js?v=20260517g"></script>
+  <script src="carteira.js?v=20260517g"></script>
+  <script src="calculadora.js?v=20260517g"></script>
+  <script src="proposta.js?v=20260517g"></script>
+  <script src="juridico.js?v=20260517g"></script>
+  <script src="usuarios.js?v=20260517g"></script>
+  <script src="auditoria.js?v=20260517g"></script>
+  <script src="faturamento.js?v=20260517g"></script>
+  <script src="conciliacao.js?v=20260517g"></script>
+</body>
+</html>

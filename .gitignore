@@ -1,0 +1,21 @@
+# Credenciais e ambiente
+.env
+.env.*
+*-secrets.*
+
+# Dependências
+node_modules/
+
+# Ferramentas / IDE / SO
+.claude/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Backups e temporários
+*.bak
+_backup/
+_pendrive/
+~$*

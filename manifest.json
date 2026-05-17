@@ -1,0 +1,45 @@
+{
+  "name": "DRG-Garantidora — Cobrança Garantida de Condomínios",
+  "short_name": "DRG-Garantidora",
+  "description": "Plataforma de gestão da cobrança garantida de contribuições condominiais: condomínios, boletos, régua de cobrança, antecipação de repasses e painel financeiro.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#475569",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    { "src": "logo.png?v=20260516b", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "logo.png?v=20260516b", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "logo.png?v=20260516b", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "Painel principal",
+      "url": "./?section=dashboard",
+      "icons": [{ "src": "logo.png?v=20260516b", "sizes": "192x192" }]
+    },
+    {
+      "name": "Condomínios",
+      "short_name": "Condomínios",
+      "description": "Gerenciar condomínios",
+      "url": "./?section=condominios",
+      "icons": [{ "src": "logo.png?v=20260516b", "sizes": "192x192" }]
+    },
+    {
+      "name": "Importação",
+      "short_name": "Importar",
+      "description": "Importar dados de Excel/CSV",
+      "url": "./?section=importacao",
+      "icons": [{ "src": "logo.png?v=20260516b", "sizes": "192x192" }]
+    }
+  ],
+  "prefer_related_applications": false,
+  "edge_side_panel": { "preferred_width": 480 }
+}
