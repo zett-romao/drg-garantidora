@@ -125,6 +125,10 @@ function modulosVisiveis() {
 // Checa permissão. pode('x','acesso') | pode('x','editar') | pode('aprovarRepasse').
 function pode(chave, nivel) {
   if (chave === 'dashboard') return true;
+  // Importadores por IA são ações contextuais (sem card de perfil): o acesso
+  // segue o "editar" do módulo pai — contrato / unidade.
+  if (chave === 'importarIA') return pode('contratos', 'editar');
+  if (chave === 'importarPlanilha') return pode('unidades', 'editar');
   // Piso anti-lockout: o tier super_admin nunca perde as telas de administração.
   if (State.role === 'super_admin'
       && (nivel === 'acesso' || nivel === 'editar')
