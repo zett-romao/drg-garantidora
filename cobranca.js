@@ -84,14 +84,37 @@ function calcularCorrecao(valor, vencimento, dataRef, serie) {
   return Math.round(v * (fator - 1) * 100) / 100;
 }
 
-// Faixa de encargo aplicável: a de maior "apartirDias" que já foi atingida.
-function faixaDaRegua(regua, diasAtraso) {
+// Soma N meses a uma data ISO pelo calendário real, clampando o dia
+// (31/01 + 1 mês = 28/02). Assim a régua trata meses de 28/29/30/31 sozinha.
+function somarMeses(iso, n) {
+  const p = String(iso || '').split('-').map(Number); // [aaaa, mm, dd]
+  if (p.length < 3) return iso;
+  const d = new Date(Date.UTC(p[0], (p[1] - 1) + n, 1));
+  const ultimo = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(p[2], ultimo));
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${mm}-${dd}`;
+}
+
+// Dias de atraso que uma faixa exige, para um boleto com este vencimento.
+// 'dias' → o próprio número; 'meses' → dias reais até vencimento + N meses.
+function faixaLimiteDias(faixa, vencimento) {
+  const a = faixaApartir(faixa);
+  if (a.num == null) return null;
+  if (a.unidade === 'meses') return diasEntreDatas(vencimento, somarMeses(vencimento, a.num));
+  return a.num;
+}
+
+// Faixa de encargo aplicável: a de maior limiar que o atraso já atingiu.
+function faixaDaRegua(regua, vencimento, dataRef) {
+  const diasAtraso = diasEntreDatas(vencimento, dataRef);
   const faixas = ((regua && regua.faixas) || [])
-    .filter((f) => f && f.apartirDias != null)
-    .slice()
-    .sort((a, b) => a.apartirDias - b.apartirDias);
+    .map((f) => ({ faixa: f, limite: faixaLimiteDias(f, vencimento) }))
+    .filter((x) => x.limite != null)
+    .sort((a, b) => a.limite - b.limite);
   let aplicavel = null;
-  faixas.forEach((f) => { if (diasAtraso >= f.apartirDias) aplicavel = f; });
+  faixas.forEach((x) => { if (diasAtraso >= x.limite) aplicavel = x.faixa; });
   return aplicavel;
 }
 
@@ -114,7 +137,7 @@ function calcularReguaCobranca(valor, vencimento, regua, dataRef, serieIndice) {
   out.multa = r2(v * (Number(regua.multaPct) || 0) / 100);
   out.juros = r2(v * (Number(regua.jurosMoraMesPct) || 0) / 100 * (out.diasAtraso / 30));
 
-  const faixa = faixaDaRegua(regua, out.diasAtraso);
+  const faixa = faixaDaRegua(regua, vencimento, dataRef);
   if (faixa) {
     out.faixaAplicada = faixa;
     out.encargoPct = Number(faixa.encargoPct) || 0;
@@ -138,8 +161,11 @@ function resumoRegua(regua) {
   const m = regua.multaPct != null ? regua.multaPct : 0;
   const j = regua.jurosMoraMesPct != null ? regua.jurosMoraMesPct : 0;
   const faixasTxt = ((regua.faixas) || [])
-    .filter((f) => f && f.apartirDias != null)
-    .map((f) => `${f.apartirDias}d→${f.encargoPct != null ? f.encargoPct : 0}%${f.aplicaCorrecao ? ' +correção' : ''}`)
+    .filter((f) => f && faixaApartir(f).num != null)
+    .map((f) => {
+      const a = faixaApartir(f);
+      return `${a.num}${a.unidade === 'meses' ? 'm' : 'd'}→${f.encargoPct != null ? f.encargoPct : 0}%${f.aplicaCorrecao ? ' +correção' : ''}`;
+    })
     .join(' · ');
   return `Multa ${m}% · juros ${j}%/mês` + (faixasTxt ? ` · faixas: ${faixasTxt}` : '');
 }

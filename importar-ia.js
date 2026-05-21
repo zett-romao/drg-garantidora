@@ -255,8 +255,8 @@ async function confirmarCriacaoIA() {
       jurosMoraMesPct: valNum('ia-juros', null),
       indexador: valId('ia-indexador') || 'INPC',
       faixas: faixasLer('ia-faixas')
-        .filter((f) => f.apartirDias != null && f.encargoPct != null)
-        .sort((a, b) => a.apartirDias - b.apartirDias),
+        .filter((f) => f.apartir != null && f.encargoPct != null)
+        .sort((a, b) => faixaOrdem(a) - faixaOrdem(b)),
     },
     ativo: true,
   };

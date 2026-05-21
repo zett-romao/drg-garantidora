@@ -65,9 +65,27 @@ const PIX_TIPOS = [
 
 // Faixas padrão de um contrato novo (modelo do contrato de referência).
 const FAIXAS_PADRAO = [
-  { apartirDias: 11, encargoPct: 10, aplicaCorrecao: false, rubrica: 'Encargos de cobrança' },
-  { apartirDias: 31, encargoPct: 20, aplicaCorrecao: true, rubrica: 'Encargos de cobrança' },
+  { apartir: 11, unidade: 'dias', encargoPct: 10, aplicaCorrecao: false, rubrica: 'Encargos de cobrança' },
+  { apartir: 31, unidade: 'dias', encargoPct: 20, aplicaCorrecao: true, rubrica: 'Encargos de cobrança' },
 ];
+
+// Limiar de uma faixa, tolerando o formato antigo (apartirDias = sempre dias).
+function faixaApartir(f) {
+  if (f && f.apartir != null) {
+    return { num: Number(f.apartir), unidade: f.unidade === 'meses' ? 'meses' : 'dias' };
+  }
+  if (f && f.apartirDias != null) {
+    return { num: Number(f.apartirDias), unidade: 'dias' };
+  }
+  return { num: null, unidade: (f && f.unidade === 'meses') ? 'meses' : 'dias' };
+}
+
+// Ordem aproximada de uma faixa (p/ ordenar a lista) — meses contam ~30 dias.
+function faixaOrdem(f) {
+  const a = faixaApartir(f);
+  if (a.num == null) return 0;
+  return a.unidade === 'meses' ? a.num * 30 : a.num;
+}
 
 // Editor de faixas reaproveitável (recebe o id do container).
 function faixasRender(containerId, faixas) {
@@ -77,15 +95,23 @@ function faixasRender(containerId, faixas) {
     cont.innerHTML = '<p class="muted" style="font-size:12px;margin-bottom:8px;">Nenhuma faixa — clique em “+ Adicionar faixa”.</p>';
     return;
   }
-  cont.innerHTML = faixas.map((f, i) => `
+  cont.innerHTML = faixas.map((f, i) => {
+    const ap = faixaApartir(f);
+    return `
     <div class="faixa-row" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
       <div class="form-group" style="margin:0;flex:2;min-width:170px;">
         <label>Rubrica do encargo</label>
         <input type="text" class="fx-rubrica" value="${escapeHtml(f.rubrica || '')}" placeholder="ex.: Honorários de cobrança">
       </div>
-      <div class="form-group" style="margin:0;flex:1;min-width:110px;">
-        <label>A partir de (dias)</label>
-        <input type="number" class="fx-dias" value="${f.apartirDias != null ? f.apartirDias : ''}">
+      <div class="form-group" style="margin:0;flex:1;min-width:150px;">
+        <label>A partir de</label>
+        <div style="display:flex;gap:6px;">
+          <input type="number" class="fx-apartir" value="${ap.num != null ? ap.num : ''}" style="flex:1;min-width:0;">
+          <select class="fx-unidade" style="width:auto;flex:0 0 auto;">
+            <option value="dias"${ap.unidade !== 'meses' ? ' selected' : ''}>dias</option>
+            <option value="meses"${ap.unidade === 'meses' ? ' selected' : ''}>meses</option>
+          </select>
+        </div>
       </div>
       <div class="form-group" style="margin:0;flex:1;min-width:110px;">
         <label>Encargo total (%)</label>
@@ -95,7 +121,8 @@ function faixasRender(containerId, faixas) {
         <input type="checkbox" class="fx-corr" ${f.aplicaCorrecao ? 'checked' : ''}> correção
       </label>
       <button type="button" class="btn btn-danger btn-sm" style="margin-bottom:9px;" onclick="faixaRemover('${containerId}', ${i})">Remover</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function faixasLer(containerId) {
@@ -103,10 +130,12 @@ function faixasLer(containerId) {
   const faixas = [];
   if (!cont) return faixas;
   cont.querySelectorAll('.faixa-row').forEach((row) => {
-    const dias = row.querySelector('.fx-dias').value;
+    const apt = row.querySelector('.fx-apartir').value;
     const enc = row.querySelector('.fx-enc').value;
+    const uni = row.querySelector('.fx-unidade');
     faixas.push({
-      apartirDias: dias === '' ? null : Number(dias),
+      apartir: apt === '' ? null : Number(apt),
+      unidade: (uni && uni.value === 'meses') ? 'meses' : 'dias',
       encargoPct: enc === '' ? null : Number(enc),
       aplicaCorrecao: row.querySelector('.fx-corr').checked,
       rubrica: (row.querySelector('.fx-rubrica').value || '').trim(),
@@ -117,7 +146,7 @@ function faixasLer(containerId) {
 
 function faixaAdd(containerId) {
   const f = faixasLer(containerId);
-  f.push({ apartirDias: null, encargoPct: null, aplicaCorrecao: false, rubrica: '' });
+  f.push({ apartir: null, unidade: 'dias', encargoPct: null, aplicaCorrecao: false, rubrica: '' });
   faixasRender(containerId, f);
 }
 
@@ -462,8 +491,8 @@ async function salvarCondominio(id) {
       jurosMoraMesPct: valNum('f-juros', 0),
       indexador: valId('f-indexador') || 'INPC',
       faixas: faixasLer('f-faixas')
-        .filter((f) => f.apartirDias != null && f.encargoPct != null)
-        .sort((a, b) => a.apartirDias - b.apartirDias),
+        .filter((f) => f.apartir != null && f.encargoPct != null)
+        .sort((a, b) => faixaOrdem(a) - faixaOrdem(b)),
     },
   };
 
