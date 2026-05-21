@@ -65,8 +65,8 @@ const PIX_TIPOS = [
 
 // Faixas padrão de um contrato novo (modelo do contrato de referência).
 const FAIXAS_PADRAO = [
-  { apartirDias: 11, encargoPct: 10, aplicaCorrecao: false },
-  { apartirDias: 31, encargoPct: 20, aplicaCorrecao: true },
+  { apartirDias: 11, encargoPct: 10, aplicaCorrecao: false, rubrica: 'Encargos de cobrança' },
+  { apartirDias: 31, encargoPct: 20, aplicaCorrecao: true, rubrica: 'Encargos de cobrança' },
 ];
 
 // Editor de faixas reaproveitável (recebe o id do container).
@@ -79,6 +79,10 @@ function faixasRender(containerId, faixas) {
   }
   cont.innerHTML = faixas.map((f, i) => `
     <div class="faixa-row" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
+      <div class="form-group" style="margin:0;flex:2;min-width:170px;">
+        <label>Rubrica do encargo</label>
+        <input type="text" class="fx-rubrica" value="${escapeHtml(f.rubrica || '')}" placeholder="ex.: Honorários de cobrança">
+      </div>
       <div class="form-group" style="margin:0;flex:1;min-width:110px;">
         <label>A partir de (dias)</label>
         <input type="number" class="fx-dias" value="${f.apartirDias != null ? f.apartirDias : ''}">
@@ -105,6 +109,7 @@ function faixasLer(containerId) {
       apartirDias: dias === '' ? null : Number(dias),
       encargoPct: enc === '' ? null : Number(enc),
       aplicaCorrecao: row.querySelector('.fx-corr').checked,
+      rubrica: (row.querySelector('.fx-rubrica').value || '').trim(),
     });
   });
   return faixas;
@@ -112,7 +117,7 @@ function faixasLer(containerId) {
 
 function faixaAdd(containerId) {
   const f = faixasLer(containerId);
-  f.push({ apartirDias: null, encargoPct: null, aplicaCorrecao: false });
+  f.push({ apartirDias: null, encargoPct: null, aplicaCorrecao: false, rubrica: '' });
   faixasRender(containerId, f);
 }
 
