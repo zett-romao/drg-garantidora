@@ -24,6 +24,7 @@ const CAMPOS_PLANILHA = [
 let plLinhas = null;        // todas as linhas da planilha (objetos)
 let plCabecalhos = null;    // array de cabeçalhos
 let plCondominioId = null;  // condomínio em contexto
+let plMapaFixo = null;      // mapeamento fixo (modo PDF — sem editor de colunas)
 
 // -------------------------------------------------------------
 // Helpers
@@ -44,6 +45,7 @@ function normalizaTipo(v) {
 }
 
 function lerMapeamentoAtual() {
+  if (plMapaFixo) return Object.assign({}, plMapaFixo);
   const m = {};
   CAMPOS_PLANILHA.forEach((c) => {
     const el = document.getElementById('map-' + c.id);
@@ -67,16 +69,17 @@ function renderImportarPlanilha() {
       plCondominioId = cid;
       plLinhas = null;
       plCabecalhos = null;
+      plMapaFixo = null;
       document.getElementById('ctx-conteudo').innerHTML = `
         <div class="card">
           <h3>Planilha de unidades / condôminos</h3>
           <p class="muted" style="margin-bottom:14px;">
-            Aceita Excel (.xlsx) ou CSV. Uma linha por unidade, e a 1ª linha deve ser o cabeçalho das colunas.
+            Aceita <strong>Excel (.xlsx), CSV ou PDF</strong>. Na planilha: uma linha por unidade, 1ª linha com o cabeçalho. No PDF: a IA lê a lista direto do documento.
           </p>
           <div class="form-group">
-            <input type="file" id="pl-arquivo" accept=".xlsx,.xls,.csv">
+            <input type="file" id="pl-arquivo" accept=".xlsx,.xls,.csv,.pdf,application/pdf">
           </div>
-          <button class="btn btn-primary" id="pl-btn" onclick="analisarPlanilha()">Analisar planilha</button>
+          <button class="btn btn-primary" id="pl-btn" onclick="analisarPlanilha()">Analisar arquivo</button>
           <div id="pl-status" style="margin-top:16px;"></div>
         </div>`;
     }
@@ -89,8 +92,10 @@ function renderImportarPlanilha() {
 async function analisarPlanilha() {
   const input = document.getElementById('pl-arquivo');
   const file = input && input.files && input.files[0];
-  if (!file) { plStatus('Selecione a planilha primeiro.', 'erro'); return; }
-  if (typeof XLSX === 'undefined') {
+  if (!file) { plStatus('Selecione o arquivo primeiro.', 'erro'); return; }
+
+  const ehPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  if (!ehPdf && typeof XLSX === 'undefined') {
     plStatus('A biblioteca de planilha ainda não carregou — recarregue a página e tente de novo.', 'erro');
     return;
   }
@@ -98,9 +103,30 @@ async function analisarPlanilha() {
   const btn = document.getElementById('pl-btn');
   btn.disabled = true;
   btn.textContent = 'Analisando…';
-  plStatus('Lendo a planilha e mapeando as colunas com a IA…', 'info');
 
   try {
+    if (ehPdf) {
+      plStatus('A IA está lendo a lista no PDF. Pode levar até um minuto…', 'info');
+      const fileBase64 = await lerArquivoBase64(file);
+      const res = await fetch(WORKER_GEMINI_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: await tokenAtual(), modo: 'planilha-pdf', fileBase64, mimeType: 'application/pdf' }),
+      });
+      const jr = await res.json().catch(() => ({}));
+      if (!res.ok || !jr.success) throw new Error(jr.error || `erro ${res.status}`);
+      const d = jr.data || {};
+      const linhas = Array.isArray(d.linhas) ? d.linhas : [];
+      if (!linhas.length) throw new Error('a IA não encontrou nenhuma unidade no PDF');
+      plLinhas = linhas;
+      plCabecalhos = CAMPOS_PLANILHA.map((c) => c.id);
+      plMapaFixo = {};
+      CAMPOS_PLANILHA.forEach((c) => { plMapaFixo[c.id] = c.id; });
+      renderRevisaoPlanilha({ mapeamento: plMapaFixo, confianca: d.confianca, observacoes: d.observacoes }, true);
+      return;
+    }
+
+    plStatus('Lendo a planilha e mapeando as colunas com a IA…', 'info');
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
     const sheet = wb.Sheets[wb.SheetNames[0]];
@@ -109,6 +135,7 @@ async function analisarPlanilha() {
 
     plLinhas = linhas;
     plCabecalhos = Object.keys(linhas[0]);
+    plMapaFixo = null;
 
     const res = await fetch(WORKER_GEMINI_URL, {
       method: 'POST',
@@ -121,7 +148,7 @@ async function analisarPlanilha() {
     renderRevisaoPlanilha(jr.data || {});
   } catch (err) {
     btn.disabled = false;
-    btn.textContent = 'Analisar planilha';
+    btn.textContent = 'Analisar arquivo';
     plStatus('Falha: ' + (err.message || err) + '. Tente novamente.', 'erro');
   }
 }
@@ -129,7 +156,7 @@ async function analisarPlanilha() {
 // -------------------------------------------------------------
 // 3. Revisão — mapeamento editável + seleção de linhas
 // -------------------------------------------------------------
-function renderRevisaoPlanilha(d) {
+function renderRevisaoPlanilha(d, pdfMode) {
   const mapa = d.mapeamento || {};
   const confPct = d.confianca != null ? Math.round(d.confianca * 100) : null;
   let nota = '';
@@ -154,11 +181,16 @@ function renderRevisaoPlanilha(d) {
 
   document.getElementById('ctx-conteudo').innerHTML = `
     ${nota}
+    ${pdfMode ? `
+    <div class="card">
+      <h3>Lista lida do PDF</h3>
+      <p class="muted" style="margin:0;">A IA extraiu as unidades e condôminos direto do PDF. Confira na tabela abaixo e selecione quem importar.</p>
+    </div>` : `
     <div class="card">
       <h3>Mapeamento das colunas</h3>
       <p class="muted" style="margin-bottom:14px;">A IA associou cada campo do sistema a uma coluna da planilha. Ajuste o que estiver errado.</p>
       ${linhasMap}
-    </div>
+    </div>`}
     <div class="card">
       <h3>Quem importar</h3>
       <p class="muted" style="margin-bottom:12px;">Marque as linhas que deseja importar — uma, algumas ou todas. <span id="pl-contador"></span></p>

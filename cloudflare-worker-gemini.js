@@ -146,6 +146,36 @@ Responda APENAS com JSON válido, sem markdown:
 
 NÃO inclua nada fora do JSON.`;
 
+const PROMPT_PLANILHA_PDF = `Você recebe um PDF com a lista de UNIDADES e CONDÔMINOS de um condomínio (apartamentos, casas ou lojas e seus proprietários/responsáveis). Pode ser uma tabela, uma lista ou um relatório.
+
+Sua tarefa: extrair CADA unidade como uma linha, com os campos abaixo.
+
+Campos de cada linha:
+- identificacao: identificação da unidade (ex.: "Apto 101", "Casa 11", "Loja 3", "101"). Se uma linha não tiver identificação, não a inclua.
+- bloco: bloco ou torre, se houver
+- fracaoIdeal: fração ideal, se houver
+- condominoNome: nome do proprietário/responsável
+- condominoCpfCnpj: CPF ou CNPJ — APENAS dígitos
+- condominoTelefone: telefone com DDD — apenas dígitos
+- condominoEmail: e-mail
+- condominoTipo: "proprietario", "inquilino" ou "responsavel", se o documento indicar
+
+REGRAS:
+- NUNCA invente dados. Campo ausente → null.
+- Extraia TODAS as unidades do documento, não pare nas primeiras.
+- Não repita a mesma unidade.
+
+Responda APENAS com JSON válido, sem markdown:
+{
+  "linhas": [
+    { "identificacao": <string>, "bloco": <string ou null>, "fracaoIdeal": <string ou null>, "condominoNome": <string ou null>, "condominoCpfCnpj": <só dígitos ou null>, "condominoTelefone": <só dígitos ou null>, "condominoEmail": <string ou null>, "condominoTipo": <string ou null> }
+  ],
+  "confianca": <número de 0 a 1>,
+  "observacoes": <avisos ao operador, ou null>
+}
+
+NÃO inclua nada fora do JSON.`;
+
 const PROMPT_VALORES = `Você recebe os CABEÇALHOS e algumas LINHAS DE AMOSTRA de uma planilha enviada pela administradora de um condomínio — a lista de unidades e o valor a cobrar de cada uma na competência (mês) atual.
 
 Sua tarefa: identificar qual coluna da planilha corresponde a cada campo do sistema. Use o nome do cabeçalho E os valores de amostra.
@@ -366,6 +396,18 @@ export default {
           '\n\nUNIDADES CADASTRADAS:\n' + JSON.stringify(unidades) +
           '\n\nUNIDADES DA PLANILHA:\n' + JSON.stringify(planilha);
         parts = [{ text: texto }];
+      } else if (payload.modo === 'planilha-pdf') {
+        const { fileBase64, mimeType } = payload;
+        if (!fileBase64 || !mimeType) {
+          return json({ error: 'Faltam campos: fileBase64, mimeType' }, 400, origin);
+        }
+        if ((fileBase64.length * 3) / 4 > MAX_BYTES) {
+          return json({ error: `Arquivo excede ${(MAX_BYTES / 1024 / 1024).toFixed(0)}MB` }, 413, origin);
+        }
+        parts = [
+          { text: PROMPT_PLANILHA_PDF },
+          { inline_data: { mime_type: mimeType, data: fileBase64 } },
+        ];
       } else {
         const { fileBase64, mimeType } = payload;
         if (!fileBase64 || !mimeType) {
