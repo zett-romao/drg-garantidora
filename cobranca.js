@@ -158,7 +158,8 @@ function renderCobranca() {
         refSub(cid, 'unidades').get(),
         refSub(cid, 'condominos').get(),
       ]);
-      const regua = (snapCond.exists && snapCond.data().regua) || {};
+      const condominio = snapCond.exists ? snapCond.data() : {};
+      const regua = condominio.regua || {};
       const unidadePorId = {};
       snapU.docs.forEach((d) => { unidadePorId[d.id] = d.data(); });
       const condominoPorId = {};
@@ -181,7 +182,7 @@ function renderCobranca() {
         if (!serieIndice) indiceErro = true;
       }
 
-      cobCtx = { cid, regua, boletos, unidadePorId, condominoPorId, serieIndice, indiceErro };
+      cobCtx = { cid, condominio, regua, boletos, unidadePorId, condominoPorId, serieIndice, indiceErro };
       renderTelaCobranca();
     },
   );
@@ -244,8 +245,9 @@ function renderTabelaCobranca() {
     const cond = ctx.condominoPorId[b.condominoId] || {};
     const correcaoTxt = !calc.pedeCorrecao ? ''
       : (ctx.serieIndice ? ` · correção ${fmtMoeda(calc.correcao)}` : ' · correção indisponível');
-    const detalhe = `+ multa ${fmtMoeda(calc.multa)} · juros ${fmtMoeda(calc.juros)} · encargo ${fmtMoeda(calc.encargo)}` +
-      (calc.faixaAplicada ? ` (faixa ${calc.faixaAplicada.apartirDias}d)` : '') + correcaoTxt;
+    const rubricaTxt = (calc.faixaAplicada && calc.faixaAplicada.rubrica)
+      ? ` (${calc.faixaAplicada.rubrica})` : '';
+    const detalhe = `+ multa ${fmtMoeda(calc.multa)} · juros ${fmtMoeda(calc.juros)} · encargo ${fmtMoeda(calc.encargo)}${rubricaTxt}` + correcaoTxt;
     return `<tr>
       <td>${escapeHtml(uni.identificacao || '—')}</td>
       <td>${escapeHtml(cond.nome || '—')}</td>
@@ -256,6 +258,7 @@ function renderTabelaCobranca() {
         <strong>${escapeHtml(fmtMoeda(calc.total))}</strong>
         <div class="muted" style="font-size:11px;">${escapeHtml(detalhe)}</div>
       </td>
+      <td class="acoes"><button class="btn btn-secondary btn-sm" onclick="gerarDemonstrativo('${b._id}')">Demonstrativo</button></td>
     </tr>`;
   }).join('');
 
@@ -264,7 +267,7 @@ function renderTabelaCobranca() {
       <table class="tabela">
         <thead><tr>
           <th>Unidade</th><th>Condômino</th><th>Vencimento</th>
-          <th>Atraso</th><th>Valor original</th><th>Valor atualizado</th>
+          <th>Atraso</th><th>Valor original</th><th>Valor atualizado</th><th>Ações</th>
         </tr></thead>
         <tbody>${linhas}</tbody>
       </table>
@@ -273,6 +276,85 @@ function renderTabelaCobranca() {
       ${itens.length} boleto(s) vencido(s) · original <strong>${escapeHtml(fmtMoeda(totalOriginal))}</strong>
       · atualizado <strong>${escapeHtml(fmtMoeda(totalAtualizado))}</strong>
     </p>`;
+}
+
+// -------------------------------------------------------------
+// Demonstrativo de débito imprimível — abre numa nova janela.
+// Itemiza cota + multa + juros + encargo (com a rubrica) + correção.
+// -------------------------------------------------------------
+function gerarDemonstrativo(boletoId) {
+  const ctx = cobCtx;
+  if (!ctx) return;
+  const b = ctx.boletos.find((x) => x._id === boletoId);
+  if (!b) return;
+  const dataRef = (document.getElementById('cob-data') || {}).value || hojeISO();
+  const calc = calcularReguaCobranca(b.valor, b.vencimento, ctx.regua, dataRef, ctx.serieIndice);
+  const uni = ctx.unidadePorId[b.unidadeId] || {};
+  const cond = ctx.condominoPorId[b.condominoId] || {};
+  const cdm = ctx.condominio || {};
+  const regua = ctx.regua || {};
+
+  const linha = (desc, valor) =>
+    `<tr><td>${escapeHtml(desc)}</td><td class="num">${escapeHtml(fmtMoeda(valor))}</td></tr>`;
+  const linhas = [linha('Contribuição condominial', calc.valorOriginal)];
+  if (calc.multa > 0) {
+    linhas.push(linha(`Multa por atraso (${regua.multaPct || 0}%)`, calc.multa));
+  }
+  if (calc.juros > 0) {
+    linhas.push(linha(`Juros de mora (${regua.jurosMoraMesPct || 0}% ao mês · ${calc.diasAtraso} dia(s))`, calc.juros));
+  }
+  if (calc.encargo > 0) {
+    const nome = (calc.faixaAplicada && calc.faixaAplicada.rubrica) || 'Encargo de cobrança';
+    linhas.push(linha(`${nome} (${calc.encargoPct}%)`, calc.encargo));
+  }
+  if (calc.correcao > 0) {
+    linhas.push(linha(`Correção monetária (${INDICE_ROTULO[regua.indexador] || regua.indexador || '—'})`, calc.correcao));
+  }
+
+  const cnpjTxt = cdm.cnpj ? ' — CNPJ ' + escapeHtml(maskCNPJ(cdm.cnpj)) : '';
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+<title>Demonstrativo de Débito</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;color:#1e293b;max-width:720px;margin:24px auto;padding:0 24px;}
+  h1{font-size:16px;margin:0 0 4px;color:#334155;letter-spacing:.5px;}
+  .topo{border-bottom:2px solid #475569;padding-bottom:10px;margin-bottom:14px;}
+  .cdm{font-size:15px;font-weight:bold;}
+  .info{margin:3px 0;font-size:13px;}
+  table{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px;}
+  th,td{padding:8px 6px;border-bottom:1px solid #e2e8f0;text-align:left;}
+  th{color:#64748b;font-size:11px;text-transform:uppercase;}
+  .num{text-align:right;}
+  tr.total td{border-top:2px solid #475569;border-bottom:none;font-weight:bold;font-size:15px;padding-top:10px;}
+  .rodape{margin-top:22px;font-size:11px;color:#64748b;line-height:1.5;}
+  .btn-print{background:#475569;color:#fff;border:none;padding:9px 16px;border-radius:6px;font-size:13px;cursor:pointer;margin-bottom:18px;}
+  @media print{.btn-print{display:none;}body{margin:0;}}
+</style></head><body>
+<button class="btn-print" onclick="window.print()">Imprimir / Salvar como PDF</button>
+<div class="topo">
+  <h1>DEMONSTRATIVO DE DÉBITO</h1>
+  <div class="cdm">${escapeHtml(cdm.nome || 'Condomínio')}${cnpjTxt}</div>
+</div>
+<p class="info">Condômino: <strong>${escapeHtml(cond.nome || '—')}</strong></p>
+<p class="info">Unidade: <strong>${escapeHtml(uni.identificacao || '—')}</strong></p>
+<p class="info">Vencimento original: <strong>${escapeHtml(fmtData(b.vencimento))}</strong> &nbsp;·&nbsp; Atraso: <strong>${calc.diasAtraso} dia(s)</strong></p>
+<p class="info">Débito apurado na posição de <strong>${escapeHtml(fmtData(dataRef))}</strong>.</p>
+<table>
+  <thead><tr><th>Discriminação</th><th class="num">Valor</th></tr></thead>
+  <tbody>
+    ${linhas.join('')}
+    <tr class="total"><td>TOTAL ATUALIZADO</td><td class="num">${escapeHtml(fmtMoeda(calc.total))}</td></tr>
+  </tbody>
+</table>
+<p class="rodape">
+  Valores apurados pela régua de cobrança do condomínio — multa, juros de mora e encargos por faixa de atraso${calc.correcao > 0 ? ', com correção monetária' : ''}.<br>
+  Documento gerado em ${escapeHtml(fmtData(hojeISO()))} pela plataforma DRG-Garantidora — D.R. Global.
+</p>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) { alert('Não foi possível abrir o demonstrativo — permita pop-ups para este site.'); return; }
+  w.document.write(html);
+  w.document.close();
 }
 
 // -------------------------------------------------------------

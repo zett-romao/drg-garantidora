@@ -85,7 +85,7 @@ Responda APENAS com JSON válido, sem markdown:
       "jurosMoraMesPct": <percentual de juros de mora ao mês, ex: 1>,
       "indexador": <código do índice de correção monetária — um de: "INPC", "IPCA", "IGPM", "IGPDI", "SELIC", "TJSP" — ou null>,
       "faixas": [
-        { "apartirDias": <a partir de quantos dias de atraso esta faixa vale, ex: 11>, "encargoPct": <encargo de cobrança TOTAL acumulado nesta faixa, ex: 10>, "aplicaCorrecao": <true se a partir desta faixa incide correção monetária, senão false> }
+        { "apartirDias": <a partir de quantos dias de atraso esta faixa vale, ex: 11>, "encargoPct": <encargo de cobrança TOTAL acumulado nesta faixa, ex: 10>, "aplicaCorrecao": <true se a partir desta faixa incide correção monetária, senão false>, "rubrica": <nome que o contrato dá a este encargo, ex: "Honorários de cobrança"; null se o contrato não nomear> }
       ]
     },
     "descontoPontualidadePct": <percentual de desconto de pontualidade, se houver, ou null>,
@@ -102,7 +102,7 @@ Responda APENAS com JSON válido, sem markdown:
 ONDE ENCONTRAR CADA DADO:
 - taxaAdmPct: cláusula da remuneração da cobradora ("X% do valor bruto das antecipações").
 - tarifaBoleto: tarifa cobrada pela emissão de cada boleto.
-- regua.faixas: cláusula da forma de cobrança — cada degrau de encargo por dias de atraso. "encargoPct" é o TOTAL acumulado da faixa (se o contrato diz "10%" e depois "mais 10%", a faixa seguinte tem 20). "aplicaCorrecao" = true a partir da faixa em que o contrato manda incidir correção monetária.
+- regua.faixas: cláusula da forma de cobrança — cada degrau de encargo por dias de atraso. "encargoPct" é o TOTAL acumulado da faixa (se o contrato diz "10%" e depois "mais 10%", a faixa seguinte tem 20). "aplicaCorrecao" = true a partir da faixa em que o contrato manda incidir correção monetária. "rubrica" = o nome que o contrato dá a esse encargo (ex.: "honorários de cobrança", "encargos de cobrança extrajudicial"); copie o termo do contrato, ou null se não houver.
 - regua.indexador: o índice citado no contrato, convertido para o código (ex.: "INPC/IBGE" vira "INPC").
 - carteiraAdquirida: cláusula de compra da carteira de inadimplentes (valor único e data de corte dos débitos).
 - avisoDenunciaDias: cláusula do prazo do contrato — antecedência mínima para denúncia.
