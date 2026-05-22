@@ -83,7 +83,10 @@ async function renderUsuarios() {
     content.innerHTML = `
       <div class="section-head">
         <div><h2>Usuários</h2><p>Contas de acesso à plataforma.</p></div>
-        <button class="btn btn-primary" onclick="abrirFormUsuario()">+ Novo usuário</button>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-secondary" onclick="relatorioUsuarios()">Relatório</button>
+          <button class="btn btn-primary" onclick="abrirFormUsuario()">+ Novo usuário</button>
+        </div>
       </div>
       <div class="card">${tabela}</div>`;
   } catch (err) {
@@ -155,6 +158,28 @@ async function salvarUsuario(uid) {
     travarSalvar(false, 'Salvar usuário');
     erroModal('Falha ao salvar: ' + ((err && err.message) || err));
   }
+}
+
+function relatorioUsuarios() {
+  const condNome = {};
+  usuariosCondominios.forEach((c) => { condNome[c.id] = c.nome; });
+  const perfilNome = {};
+  usuariosPerfis.forEach((p) => { perfilNome[p.id] = p.nome; });
+  const linhas = Object.keys(cacheUsuarios).map((id) => {
+    const u = cacheUsuarios[id];
+    const pe = u.perfilId || ('seed_' + (u.role || 'condomino'));
+    return [
+      u.nome || '',
+      u.email || '',
+      ROTULO_PERFIL[u.role] || u.role || '',
+      perfilNome[pe] || '',
+      u.condominioId ? (condNome[u.condominioId] || u.condominioId) : '',
+      u.ativo === false ? 'Inativo' : 'Ativo',
+    ];
+  });
+  linhas.sort((a, z) => String(a[0]).localeCompare(String(z[0]), 'pt-BR'));
+  abrirRelatorio('Relatório de Usuários', '',
+    ['Nome', 'E-mail', 'Tipo de acesso', 'Perfil', 'Condomínio', 'Status'], linhas, '', 'usuarios');
 }
 
 SECTION_RENDERERS.usuarios = renderUsuarios;

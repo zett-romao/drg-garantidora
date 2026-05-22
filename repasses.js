@@ -22,6 +22,7 @@ const REP_FALHA = ['FAILED', 'CANCELLED', 'BLOCKED'];
 let repCondominio = {};      // { nome, repasse:{pixTipo,pixChave} } do condomínio em contexto
 let repComps = {};           // id -> dados da competência (para os handlers de onclick)
 let repEmAndamento = false;  // trava anti-disparo-duplo na aprovação
+let repRelCotas = null;      // Σ cotas por competência — para o relatório
 
 function repHojeISO() {
   const d = new Date();
@@ -120,6 +121,7 @@ function renderRepasses() {
         if (b.status === 'CANCELADO') return;   // boleto cancelado não entra no repasse
         cotaPorComp[b.competenciaId] = (cotaPorComp[b.competenciaId] || 0) + (Number(b.valor) || 0);
       });
+      repRelCotas = cotaPorComp;
 
       const comps = snapComp.docs
         .map((d) => ({ id: d.id, c: d.data() }))
@@ -173,6 +175,9 @@ function renderRepasses() {
         : '';
 
       document.getElementById('ctx-conteudo').innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+          <button class="btn btn-secondary" onclick="relatorioRepasses()">Relatório</button>
+        </div>
         ${avisoAprovar}
         ${avisoPix}
         <div class="card">
@@ -336,6 +341,28 @@ async function desfazerRepasse(cid, compId) {
   } catch (err) {
     alert('Falha ao desfazer: ' + (err.message || err));
   }
+}
+
+function relatorioRepasses() {
+  const cotas = repRelCotas || {};
+  const ids = Object.keys(repComps).sort((a, z) => {
+    const ca = repComps[a] || {};
+    const cz = repComps[z] || {};
+    return ((cz.ano || 0) * 100 + (cz.mes || 0)) - ((ca.ano || 0) * 100 + (ca.mes || 0));
+  });
+  const rotStatus = {
+    ok: 'Repassado', processando: 'Repassando', aguardando: 'Aguardando aprovação',
+    falha: 'Falhou', pendente: 'A repassar',
+  };
+  let total = 0;
+  const linhas = ids.map((id) => {
+    const c = repComps[id];
+    const valor = c.repasseValor != null ? c.repasseValor : (cotas[id] || 0);
+    total += Number(valor) || 0;
+    return [rotuloCompetencia(c), fmtData(c.vencimento), fmtMoeda(valor), rotStatus[repClassificar(c)] || '—'];
+  });
+  abrirRelatorio('Relatório de Repasses', condominioContextoNome(),
+    ['Competência', 'Vencimento', 'Valor', 'Status'], linhas, `Total: ${fmtMoeda(total)}`, 'repasses');
 }
 
 SECTION_RENDERERS.repasses = renderRepasses;

@@ -10,6 +10,7 @@ window.SECTION_RENDERERS = window.SECTION_RENDERERS || {};
 const JUR_DIAS_MIN = 60;                                   // atraso mínimo p/ candidato
 const JUR_PAGO = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'];
 let cacheJuridico = {};
+let jurCtx = null; // { uni, cond } do último render — para o relatório
 
 function jurHojeISO() {
   const d = new Date();
@@ -36,6 +37,7 @@ function renderJuridico() {
       snapU.docs.forEach((d) => { uni[d.id] = d.data(); });
       const cond = {};
       snapC.docs.forEach((d) => { cond[d.id] = d.data(); });
+      jurCtx = { uni, cond };
 
       cacheJuridico = {};
       const noJuridico = [];
@@ -84,6 +86,9 @@ function renderJuridico() {
         : `<div class="empty-state">Nenhum boleto vencido há mais de ${JUR_DIAS_MIN} dias.</div>`;
 
       document.getElementById('ctx-conteudo').innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+          <button class="btn btn-secondary" onclick="relatorioJuridico()">Relatório</button>
+        </div>
         <div class="card"><h3>Em cobrança judicial</h3>${tabJur}</div>
         <div class="card">
           <h3>Candidatos — vencidos há mais de ${JUR_DIAS_MIN} dias</h3>
@@ -136,6 +141,30 @@ async function retirarJuridico(cid, boletoId) {
   } catch (err) {
     alert('Falha ao retirar: ' + (err.message || err));
   }
+}
+
+function relatorioJuridico() {
+  const ctx = jurCtx || { uni: {}, cond: {} };
+  const lista = Object.keys(cacheJuridico)
+    .map((id) => cacheJuridico[id])
+    .filter((b) => b.juridicoEm)
+    .sort((a, z) => String(z.juridicoEm || '').localeCompare(String(a.juridicoEm || '')));
+  let total = 0;
+  const linhas = lista.map((b) => {
+    total += Number(b.valor) || 0;
+    return [
+      (ctx.uni[b.unidadeId] || {}).identificacao || '',
+      (ctx.cond[b.condominoId] || {}).nome || '',
+      fmtData(b.vencimento),
+      fmtMoeda(b.valor),
+      b.juridicoProcesso || '',
+      b.juridicoAdvogado || '',
+      fmtData(b.juridicoEm),
+    ];
+  });
+  abrirRelatorio('Relatório — Cobrança Judicial', condominioContextoNome(),
+    ['Unidade', 'Condômino', 'Vencimento', 'Valor', 'Nº processo', 'Advogado', 'Enviado em'], linhas,
+    `Total em cobrança judicial: ${fmtMoeda(total)}`, 'cobranca-judicial');
 }
 
 SECTION_RENDERERS.juridico = renderJuridico;

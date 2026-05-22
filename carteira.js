@@ -58,9 +58,10 @@ function renderCarteira() {
            </div>`
         : '<div class="alert alert-info">Nenhuma carteira adquirida registrada no contrato ativo. A compra da carteira (valor, data de corte) vem do contrato — edite o contrato em Cadastros.</div>';
 
-      const novo = podeEditar()
-        ? `<div style="text-align:right;margin-bottom:12px;"><button class="btn btn-primary" onclick="abrirFormTituloCarteira('${cid}')">+ Novo título</button></div>`
+      const cartEdit = podeEditar()
+        ? ` <button class="btn btn-primary" onclick="abrirFormTituloCarteira('${cid}')">+ Novo título</button>`
         : '';
+      const novo = `<div style="text-align:right;margin-bottom:12px;"><button class="btn btn-secondary" onclick="relatorioCarteira()">Relatório</button>${cartEdit}</div>`;
 
       const tabela = snapTit.size
         ? `<div class="tabela-wrap"><table class="tabela">
@@ -125,6 +126,18 @@ async function excluirTituloCarteira(cid, id) {
   } catch (err) {
     alert('Falha ao excluir: ' + (err.message || err));
   }
+}
+
+function relatorioCarteira() {
+  let total = 0;
+  const linhas = Object.keys(cacheCarteira).map((id) => {
+    const t = cacheCarteira[id];
+    total += Number(t.valor) || 0;
+    return [t.devedor || '', t.unidade || '', fmtData(t.vencimentoOriginal), fmtMoeda(t.valor), t.observacao || ''];
+  });
+  abrirRelatorio('Relatório da Carteira Adquirida', condominioContextoNome(),
+    ['Devedor', 'Unidade', 'Vencimento original', 'Valor', 'Observação'], linhas,
+    `Total dos títulos: ${fmtMoeda(total)}`, 'carteira');
 }
 
 SECTION_RENDERERS.carteira = renderCarteira;

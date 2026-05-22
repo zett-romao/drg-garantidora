@@ -10,6 +10,7 @@
 window.SECTION_RENDERERS = window.SECTION_RENDERERS || {};
 
 const FIN_STATUS_PAGO = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'];
+let finRelCtx = null;   // dados por competência — para o relatório
 
 function finHojeISO() {
   const d = new Date();
@@ -70,6 +71,7 @@ function renderFinanceiro() {
         }
       });
 
+      finRelCtx = { porComp, compRotulo, compOrdem };
       const linhasComp = Object.keys(porComp)
         .sort((a, z) => (compOrdem[z] || 0) - (compOrdem[a] || 0))
         .map((id) => {
@@ -91,6 +93,9 @@ function renderFinanceiro() {
 
       const grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;';
       document.getElementById('ctx-conteudo').innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+          <button class="btn btn-secondary" onclick="relatorioFinanceiro()">Relatório</button>
+        </div>
         <div class="card">
           <h3>Cotas condominiais</h3>
           <div style="${grid}">
@@ -113,6 +118,20 @@ function renderFinanceiro() {
         </div>`;
     },
   );
+}
+
+function relatorioFinanceiro() {
+  const ctx = finRelCtx || { porComp: {}, compRotulo: {}, compOrdem: {} };
+  const ids = Object.keys(ctx.porComp).sort((a, z) => (ctx.compOrdem[z] || 0) - (ctx.compOrdem[a] || 0));
+  const linhas = ids.map((id) => {
+    const pc = ctx.porComp[id];
+    return [
+      ctx.compRotulo[id] || '—',
+      fmtMoeda(pc.faturado), fmtMoeda(pc.recebido), fmtMoeda(pc.aberto), fmtMoeda(pc.vencido),
+    ];
+  });
+  abrirRelatorio('Relatório — Painel Financeiro', condominioContextoNome(),
+    ['Competência', 'Faturado', 'Recebido', 'Em aberto', 'Vencido'], linhas, '', 'financeiro');
 }
 
 SECTION_RENDERERS.financeiro = renderFinanceiro;
