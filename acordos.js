@@ -136,9 +136,21 @@ function abrirFormAcordo(id) {
       </select>`)}
     </div>
     ${separadorForm('Parcelas do acordo')}
-    <p class="muted" style="font-size:12px;margin-bottom:10px;">Cada parcela: vencimento e valor negociado.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Informe o início, o número de parcelas (ou a data em "Repetir até") e o valor de cada uma — depois clique em "Gerar parcelas". A lista gerada continua editável.</p>
+    <div class="form-row-3">
+      ${campo('Início dos pagamentos', '<input type="date" id="ac-pc-inicio">')}
+      ${campo('Número de parcelas', '<input type="number" id="ac-pc-num" min="1" step="1" placeholder="Ex: 24">')}
+      ${campo('Valor de cada parcela (R$)', '<input type="number" id="ac-pc-valor" step="0.01" placeholder="Ex: 250">')}
+    </div>
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="form-group" style="margin:0;max-width:200px;">
+        <label>Repetir até (opcional)</label>
+        <input type="date" id="ac-pc-ate">
+      </div>
+      <button type="button" class="btn btn-primary btn-sm" style="margin-bottom:9px;" onclick="acordoGerarParcelas()">Gerar parcelas</button>
+    </div>
     <div id="ac-parcelas"></div>
-    <button type="button" class="btn btn-secondary btn-sm" onclick="acordoParcelaAdd()" style="margin-bottom:6px;">+ Adicionar parcela</button>
+    <button type="button" class="btn btn-secondary btn-sm" onclick="acordoParcelaAdd()" style="margin-bottom:6px;">+ Adicionar parcela avulsa</button>
     ${campo('Observações', `<textarea id="ac-obs" rows="2">${escapeHtml(a.observacoes || '')}</textarea>`)}`;
 
   abrirModalForm(id ? 'Editar acordo' : 'Novo acordo', corpo, () => salvarAcordo(id), 'Salvar acordo');
@@ -198,6 +210,32 @@ function acordoParcelaRemover(i) {
   const p = acordoParcelasLer();
   p.splice(i, 1);
   acordoParcelasRender(p);
+}
+
+// Gera a lista de parcelas mensais — início + número (ou "repetir até") + valor.
+function acordoGerarParcelas() {
+  const inicio = valId('ac-pc-inicio');
+  const valor = Number(valId('ac-pc-valor')) || 0;
+  const ate = valId('ac-pc-ate');
+  let num = parseInt(valId('ac-pc-num'), 10);
+  if (!inicio) { erroModal('Informe o início dos pagamentos.'); return; }
+  if (!(valor > 0)) { erroModal('Informe o valor de cada parcela.'); return; }
+  if (!(num > 0) && ate) {
+    const pi = inicio.split('-').map(Number);
+    const pa = ate.split('-').map(Number);
+    num = (pa[0] * 12 + pa[1]) - (pi[0] * 12 + pi[1]) + 1;
+  }
+  if (!(num > 0)) { erroModal('Informe o número de parcelas ou a data em "Repetir até".'); return; }
+  if (num > 240) { erroModal('Número de parcelas muito alto (máximo 240).'); return; }
+  const parcelas = [];
+  for (let i = 0; i < num; i++) {
+    parcelas.push({ vencimento: somarMeses(inicio, i), valor });
+  }
+  acordoParcelasRender(parcelas);
+  const numEl = document.getElementById('ac-pc-num');
+  if (numEl) numEl.value = num;
+  const ateEl = document.getElementById('ac-pc-ate');
+  if (ateEl) ateEl.value = somarMeses(inicio, num - 1);
 }
 
 // -------------------------------------------------------------
