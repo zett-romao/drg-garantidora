@@ -38,6 +38,27 @@ function acTotalParcelas(parcelas) {
   return (parcelas || []).reduce((s, p) => s + (Number(p.valor) || 0), 0);
 }
 
+// Quantos dias antes do fim do lote atual o sistema avisa p/ emitir o próximo.
+const ACORDO_AVISO_DIAS = 20;
+
+// Situação dos lotes de um acordo: total acordado, parcelas já geradas, quantas
+// faltam e se está na hora de emitir o próximo lote (faltam ≤ 20 dias).
+function acordoStatusLote(a) {
+  a = a || {};
+  const geradas = (a.parcelas || []).length;
+  const total = Number(a.numeroParcelas) > 0 ? Number(a.numeroParcelas) : geradas;
+  const faltam = Math.max(0, total - geradas);
+  let ultimaVenc = '';
+  (a.parcelas || []).forEach((p) => {
+    if (p && p.vencimento && p.vencimento > ultimaVenc) ultimaVenc = p.vencimento;
+  });
+  const diasAteUltima = ultimaVenc ? diasEntreDatas(acHojeISO(), ultimaVenc) : null;
+  const ativo = (a.situacao || 'ativo') === 'ativo';
+  const precisaEmitir = ativo && faltam > 0 &&
+    diasAteUltima != null && diasAteUltima <= ACORDO_AVISO_DIAS;
+  return { total, geradas, faltam, ultimaVenc, diasAteUltima, precisaEmitir };
+}
+
 // -------------------------------------------------------------
 // Lista de acordos
 // -------------------------------------------------------------
@@ -68,7 +89,7 @@ function renderTelaAcordos() {
     .slice()
     .sort((a, z) => String(z.dataAcordo || '').localeCompare(String(a.dataAcordo || '')))
     .map((a) => {
-      const np = (a.parcelas || []).length;
+      const st = acordoStatusLote(a);
       const proc = (a.tipo === 'judicial' && a.numeroProcesso)
         ? `<div class="muted" style="font-size:11px;">Proc. ${escapeHtml(a.numeroProcesso)}${a.tribunal ? ' · ' + escapeHtml(a.tribunal) : ''}</div>`
         : '';
@@ -76,11 +97,15 @@ function renderTelaAcordos() {
         ? `<button class="btn btn-secondary btn-sm" onclick="abrirFormAcordo('${a._id}')">Editar</button>
            <button class="btn btn-danger btn-sm" onclick="excluirAcordo('${a._id}')">Excluir</button>`
         : '';
+      const parcTxt = st.total > st.geradas ? `${st.geradas}/${st.total} parc.` : `${st.geradas} parc.`;
+      const avisoLote = st.precisaEmitir
+        ? '<div style="margin-top:3px;"><span class="badge badge-warning">Emitir próximo lote</span></div>'
+        : '';
       return `<tr>
         <td>${escapeHtml(acRotuloCondomino(a.condominoId))}</td>
         <td>${acBadgeTipo(a.tipo)}${proc}</td>
         <td>${escapeHtml(fmtData(a.dataAcordo))}</td>
-        <td class="col-num">${np} parc. · ${escapeHtml(fmtMoeda(acTotalParcelas(a.parcelas)))}</td>
+        <td class="col-num">${parcTxt} · ${escapeHtml(fmtMoeda(acTotalParcelas(a.parcelas)))}${avisoLote}</td>
         <td>${acBadgeSituacao(a.situacao)}</td>
         <td class="acoes">${acoes}</td>
       </tr>`;
@@ -92,13 +117,27 @@ function renderTelaAcordos() {
          <tbody>${linhas}</tbody></table></div>`
     : '<div class="empty-state">Nenhum acordo registrado.</div>';
 
+  const precisam = ctx.acordos.filter((a) => acordoStatusLote(a).precisaEmitir);
+  const cardAviso = precisam.length
+    ? `<div class="card" style="border-left:3px solid var(--warning,#C2410C);">
+         <h3 style="margin-top:0;">Parcelas remanescentes a emitir</h3>
+         <p class="muted" style="font-size:13px;">${precisam.length} acordo(s) com o lote atual perto do fim — abra o acordo, gere o próximo lote (já corrigido) e emita as parcelas:</p>
+         <ul style="margin:6px 0 0;padding-left:18px;font-size:13px;">
+           ${precisam.map((a) => {
+             const st = acordoStatusLote(a);
+             return `<li><strong>${escapeHtml(acRotuloCondomino(a.condominoId))}</strong> — faltam ${st.faltam} de ${st.total} parcela(s); última gerada vence ${escapeHtml(fmtData(st.ultimaVenc))}</li>`;
+           }).join('')}
+         </ul>
+       </div>`
+    : '';
+
   const acEdit = podeEditar('acordos')
     ? '<button class="btn btn-primary" onclick="abrirFormAcordo()">+ Novo acordo</button>'
     : '';
   const novo = `<div style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:12px;">
        <button class="btn btn-secondary" onclick="relatorioAcordos()">Relatório</button>${acEdit}
      </div>`;
-  document.getElementById('ctx-conteudo').innerHTML = `${novo}<div class="card">${tabela}</div>`;
+  document.getElementById('ctx-conteudo').innerHTML = `${novo}${cardAviso}<div class="card">${tabela}</div>`;
 }
 
 // -------------------------------------------------------------
@@ -137,10 +176,11 @@ function abrirFormAcordo(id) {
       </select>`)}
     </div>
     ${separadorForm('Parcelas do acordo')}
-    <p class="muted" style="font-size:12px;margin-bottom:10px;">Informe o início, o número de parcelas (ou a data em "Repetir até") e o valor de cada uma — depois clique em "Gerar parcelas". A lista gerada continua editável.</p>
+    <p class="muted" style="font-size:12px;margin-bottom:10px;">Informe o número total de parcelas acordadas e gere em lotes — o recomendado é 12 por vez. A correção costuma incidir só nas 12 primeiras; os lotes seguintes você gera depois (já corrigidos) e o sistema avisa ${ACORDO_AVISO_DIAS} dias antes de cada lote terminar.</p>
+    ${campo('Número total de parcelas acordadas', `<input type="number" id="ac-num-total" min="1" step="1" placeholder="Ex: 48" value="${a.numeroParcelas || ''}" onchange="acordoAtualizarResumo()">`)}
     <div class="form-row-3">
-      ${campo('Início dos pagamentos', '<input type="date" id="ac-pc-inicio">')}
-      ${campo('Número de parcelas', '<input type="number" id="ac-pc-num" min="1" step="1" placeholder="Ex: 24">')}
+      ${campo('Início do lote', '<input type="date" id="ac-pc-inicio">')}
+      ${campo('Parcelas neste lote', '<input type="number" id="ac-pc-num" min="1" step="1" placeholder="12">')}
       ${campo('Valor de cada parcela (R$)', '<input type="number" id="ac-pc-valor" step="0.01" placeholder="Ex: 250">')}
     </div>
     <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
@@ -148,14 +188,15 @@ function abrirFormAcordo(id) {
         <label>Repetir até (opcional)</label>
         <input type="date" id="ac-pc-ate">
       </div>
-      <button type="button" class="btn btn-primary btn-sm" style="margin-bottom:9px;" onclick="acordoGerarParcelas()">Gerar parcelas</button>
+      <button type="button" class="btn btn-primary btn-sm" style="margin-bottom:9px;" onclick="acordoGerarParcelas()">Gerar / adicionar lote</button>
     </div>
     <div id="ac-parcelas"></div>
+    <div id="ac-parcelas-resumo" style="font-size:12px;margin:2px 0 10px;"></div>
     <button type="button" class="btn btn-secondary btn-sm" onclick="acordoParcelaAdd()" style="margin-bottom:6px;">+ Adicionar parcela avulsa</button>
     ${campo('Observações', `<textarea id="ac-obs" rows="2">${escapeHtml(a.observacoes || '')}</textarea>`)}`;
 
   abrirModalForm(id ? 'Editar acordo' : 'Novo acordo', corpo, () => salvarAcordo(id), 'Salvar acordo');
-  acordoParcelasRender((a.parcelas && a.parcelas.length) ? a.parcelas : [{ vencimento: '', valor: null }]);
+  acordoParcelasRender(a.parcelas || []);
 }
 
 // Mostra/esconde os campos de processo e tribunal conforme o tipo.
@@ -172,13 +213,16 @@ function acordoParcelasRender(parcelas) {
   const cont = document.getElementById('ac-parcelas');
   if (!cont) return;
   if (!parcelas || !parcelas.length) {
-    cont.innerHTML = '<p class="muted" style="font-size:12px;margin-bottom:8px;">Nenhuma parcela — clique em “+ Adicionar parcela”.</p>';
+    cont.innerHTML = '<p class="muted" style="font-size:12px;margin-bottom:8px;">Nenhuma parcela gerada — preencha o gerador acima e clique em “Gerar / adicionar lote”.</p>';
+    acordoAtualizarResumo();
     return;
   }
-  cont.innerHTML = parcelas.map((p, i) => `
+  cont.innerHTML = parcelas.map((p, i) => {
+    const lote = Math.floor(i / 12) + 1;
+    return `
     <div class="parcela-row" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px;">
       <div class="form-group" style="margin:0;flex:1;min-width:150px;">
-        <label>Vencimento ${i + 1}ª</label>
+        <label>Vencimento ${i + 1}ª <span class="muted" style="font-weight:normal;">· lote ${lote}</span></label>
         <input type="date" class="pc-venc" value="${escapeHtml(p.vencimento || '')}">
       </div>
       <div class="form-group" style="margin:0;flex:1;min-width:120px;">
@@ -186,7 +230,27 @@ function acordoParcelasRender(parcelas) {
         <input type="number" step="0.01" class="pc-valor" value="${p.valor != null ? p.valor : ''}">
       </div>
       <button type="button" class="btn btn-danger btn-sm" style="margin-bottom:9px;" onclick="acordoParcelaRemover(${i})">Remover</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+  acordoAtualizarResumo();
+}
+
+// Resumo "X de Y parcelas geradas" logo abaixo do editor de parcelas.
+function acordoAtualizarResumo() {
+  const el = document.getElementById('ac-parcelas-resumo');
+  if (!el) return;
+  const cont = document.getElementById('ac-parcelas');
+  const geradas = cont ? cont.querySelectorAll('.parcela-row').length : 0;
+  const total = parseInt(valId('ac-num-total'), 10) || 0;
+  if (!total && !geradas) { el.innerHTML = ''; return; }
+  if (!total) {
+    el.innerHTML = `<span class="muted">${geradas} parcela(s) gerada(s). Informe o número total para o controle de lotes.</span>`;
+    return;
+  }
+  const faltam = Math.max(0, total - geradas);
+  el.innerHTML = faltam
+    ? `<span class="muted"><strong>${geradas} de ${total}</strong> parcelas geradas — faltam <strong>${faltam}</strong>. Gere o próximo lote quando for emitir as parcelas remanescentes.</span>`
+    : `<span style="color:var(--success);"><strong>${geradas} de ${total}</strong> — todas as parcelas do acordo já foram geradas.</span>`;
 }
 
 function acordoParcelasLer() {
@@ -213,30 +277,44 @@ function acordoParcelaRemover(i) {
   acordoParcelasRender(p);
 }
 
-// Gera a lista de parcelas mensais — início + número (ou "repetir até") + valor.
+// Gera um lote de parcelas mensais e ACRESCENTA às já existentes. Sem início,
+// começa no mês seguinte à última parcela; sem número, completa um lote de 12
+// (ou o que faltar para o total acordado).
 function acordoGerarParcelas() {
-  const inicio = valId('ac-pc-inicio');
+  const existentes = acordoParcelasLer().filter((p) => p.vencimento || p.valor != null);
+  let inicio = valId('ac-pc-inicio');
   const valor = Number(valId('ac-pc-valor')) || 0;
   const ate = valId('ac-pc-ate');
   let num = parseInt(valId('ac-pc-num'), 10);
-  if (!inicio) { erroModal('Informe o início dos pagamentos.'); return; }
+
+  if (!inicio && existentes.length) {
+    let ultima = '';
+    existentes.forEach((p) => { if (p.vencimento && p.vencimento > ultima) ultima = p.vencimento; });
+    if (ultima) inicio = somarMeses(ultima, 1);
+  }
+  if (!inicio) { erroModal('Informe o início do lote.'); return; }
   if (!(valor > 0)) { erroModal('Informe o valor de cada parcela.'); return; }
+
   if (!(num > 0) && ate) {
     const pi = inicio.split('-').map(Number);
     const pa = ate.split('-').map(Number);
     num = (pa[0] * 12 + pa[1]) - (pi[0] * 12 + pi[1]) + 1;
   }
-  if (!(num > 0)) { erroModal('Informe o número de parcelas ou a data em "Repetir até".'); return; }
-  if (num > 240) { erroModal('Número de parcelas muito alto (máximo 240).'); return; }
-  const parcelas = [];
-  for (let i = 0; i < num; i++) {
-    parcelas.push({ vencimento: somarMeses(inicio, i), valor });
+  if (!(num > 0)) {
+    const total = parseInt(valId('ac-num-total'), 10);
+    num = total > 0 ? Math.min(12, total - existentes.length) : 12;
   }
-  acordoParcelasRender(parcelas);
-  const numEl = document.getElementById('ac-pc-num');
-  if (numEl) numEl.value = num;
-  const ateEl = document.getElementById('ac-pc-ate');
-  if (ateEl) ateEl.value = somarMeses(inicio, num - 1);
+  if (!(num > 0)) { erroModal('Não há parcelas a gerar — confira o número total acordado.'); return; }
+  if (existentes.length + num > 240) { erroModal('Número de parcelas muito alto (máximo 240).'); return; }
+
+  const novas = [];
+  for (let i = 0; i < num; i++) novas.push({ vencimento: somarMeses(inicio, i), valor });
+  acordoParcelasRender(existentes.concat(novas));
+
+  ['ac-pc-inicio', 'ac-pc-num', 'ac-pc-valor', 'ac-pc-ate'].forEach((cid) => {
+    const el = document.getElementById(cid);
+    if (el) el.value = '';
+  });
 }
 
 // -------------------------------------------------------------
@@ -252,6 +330,7 @@ async function salvarAcordo(id) {
   if (!parcelas.length) { erroModal('Adicione pelo menos uma parcela.'); return; }
 
   const cond = ctx.condominos[condominoId] || {};
+  const numTotal = parseInt(valId('ac-num-total'), 10);
   const dados = {
     condominoId,
     unidadeId: cond.unidadeId || null,
@@ -260,6 +339,7 @@ async function salvarAcordo(id) {
     tribunal: tipo === 'judicial' ? valId('ac-tribunal') : '',
     dataAcordo: valId('ac-data') || null,
     parcelas,
+    numeroParcelas: numTotal > 0 ? numTotal : parcelas.length,
     observacoes: valId('ac-obs'),
     situacao: valId('ac-situacao') || 'ativo',
   };

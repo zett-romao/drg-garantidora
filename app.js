@@ -535,6 +535,7 @@ async function renderDashboard() {
     <div class="dashboard-grid" id="dash-stats">
       <div class="stat-card"><span class="stat-label">Carregando…</span></div>
     </div>
+    <div id="dash-avisos"></div>
     <div class="card">
       <h3>Próximos passos</h3>
       <p class="muted">A Fase 1 entrega os cadastros (condomínios, unidades, condôminos, contratos) e a importação por Excel/CSV. As fases seguintes abrem faturamento, cobrança e o painel financeiro.</p>
@@ -571,8 +572,41 @@ async function renderDashboard() {
         <span class="stat-value">—</span>
         <span class="stat-sub">Disponível na Fase 3</span>
       </div>`;
+    dashCarregarAvisosAcordos(snap.docs);
   } catch (err) {
     $('dash-stats').innerHTML = `<div class="stat-card"><span class="stat-label">Indicadores</span><span class="stat-sub">Cadastre o primeiro condomínio para ver os números.</span></div>`;
+  }
+}
+
+// Aviso secundário: acordos com lote de parcelas perto do fim (precisa emitir
+// as parcelas remanescentes). Carrega depois das estatísticas — não bloqueia.
+async function dashCarregarAvisosAcordos(condDocs) {
+  const alvo = $('dash-avisos');
+  if (!alvo || !pode('acordos', 'acesso') || typeof acordoStatusLote !== 'function') return;
+  try {
+    const ativos = (condDocs || []).filter((d) => d.data().ativo !== false);
+    if (!ativos.length) return;
+    const snaps = await Promise.all(
+      ativos.map((d) => refSub(d.id, 'acordos').get().catch(() => ({ docs: [] }))),
+    );
+    let n = 0;
+    snaps.forEach((s) => {
+      (s.docs || []).forEach((ad) => {
+        if (acordoStatusLote(ad.data()).precisaEmitir) n++;
+      });
+    });
+    if (!n) { alvo.innerHTML = ''; return; }
+    alvo.innerHTML = `
+      <div class="card clicavel" onclick="navegarPara('acordos')"
+           style="border-left:3px solid var(--warning,#C2410C);cursor:pointer;">
+        <h3 style="margin-top:0;">Acordos — parcelas remanescentes a emitir</h3>
+        <p class="muted" style="font-size:13px;margin:0;">
+          <strong>${n} acordo(s)</strong> estão com o lote atual perto do fim (20 dias ou menos).
+          Abra <strong>Acordos</strong> para gerar e emitir as parcelas remanescentes.
+        </p>
+      </div>`;
+  } catch (_) {
+    alvo.innerHTML = '';
   }
 }
 
