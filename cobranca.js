@@ -178,11 +178,12 @@ function renderCobranca() {
     'Régua de Cobrança',
     'Inadimplência do condomínio com os valores atualizados pela régua de cobrança.',
     async (cid) => {
-      const [snapCond, snapB, snapU, snapC] = await Promise.all([
+      const [snapCond, snapB, snapU, snapC, snapA] = await Promise.all([
         refCondominios().doc(cid).get(),
         refSub(cid, 'boletos').get(),
         refSub(cid, 'unidades').get(),
         refSub(cid, 'condominos').get(),
+        refSub(cid, 'acordos').get().catch(() => ({ docs: [] })),
       ]);
       const condominio = snapCond.exists ? snapCond.data() : {};
       const regua = condominio.regua || {};
@@ -208,7 +209,8 @@ function renderCobranca() {
         if (!serieIndice) indiceErro = true;
       }
 
-      cobCtx = { cid, condominio, regua, boletos, unidadePorId, condominoPorId, serieIndice, indiceErro };
+      const acordos = snapA.docs.map((d) => Object.assign({ _id: d.id }, d.data()));
+      cobCtx = { cid, condominio, regua, boletos, unidadePorId, condominoPorId, serieIndice, indiceErro, acordos };
       renderTelaCobranca();
     },
   );
@@ -231,6 +233,9 @@ function renderTelaCobranca() {
   }
 
   document.getElementById('ctx-conteudo').innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+      <button class="btn btn-secondary" onclick="relatorioCobranca()">Relatório</button>
+    </div>
     <div class="card">
       ${aviso}
       ${indiceNota}
@@ -381,6 +386,75 @@ function gerarDemonstrativo(boletoId) {
   if (!w) { alert('Não foi possível abrir o demonstrativo — permita pop-ups para este site.'); return; }
   w.document.write(html);
   w.document.close();
+}
+
+// -------------------------------------------------------------
+// Relatório de inadimplência — boletos vencidos + parcelas de acordo,
+// com valor original e valor atualizado pela régua de cobrança.
+// -------------------------------------------------------------
+function relatorioCobranca() {
+  const ctx = cobCtx;
+  if (!ctx) return;
+  const dataRef = (document.getElementById('cob-data') || {}).value || hojeISO();
+  const itens = [];
+
+  ctx.boletos.forEach((b) => {
+    const calc = calcularReguaCobranca(b.valor, b.vencimento, ctx.regua, dataRef, ctx.serieIndice);
+    if (calc.diasAtraso <= 0) return;
+    const uni = ctx.unidadePorId[b.unidadeId] || {};
+    const cond = ctx.condominoPorId[b.condominoId] || {};
+    itens.push({
+      unidade: uni.identificacao || '—',
+      condomino: cond.nome || '—',
+      referencia: 'Boleto',
+      vencimento: b.vencimento,
+      dias: calc.diasAtraso,
+      original: calc.valorOriginal,
+      atualizado: calc.total,
+    });
+  });
+
+  (ctx.acordos || []).forEach((a) => {
+    if (a.situacao && a.situacao !== 'ativo') return;
+    const cond = ctx.condominoPorId[a.condominoId] || {};
+    const uni = ctx.unidadePorId[a.unidadeId] ||
+      (cond.unidadeId ? ctx.unidadePorId[cond.unidadeId] : null) || {};
+    const ref = a.tipo === 'judicial' ? 'Acordo jud' : 'Acordo ext';
+    (a.parcelas || []).forEach((p, i) => {
+      if (!p.vencimento || !(Number(p.valor) > 0)) return;
+      const calc = calcularReguaCobranca(p.valor, p.vencimento, ctx.regua, dataRef, ctx.serieIndice);
+      if (calc.diasAtraso <= 0) return;
+      itens.push({
+        unidade: uni.identificacao || '—',
+        condomino: cond.nome || '—',
+        referencia: `${ref} — ${i + 1}ª parcela`,
+        vencimento: p.vencimento,
+        dias: calc.diasAtraso,
+        original: calc.valorOriginal,
+        atualizado: calc.total,
+      });
+    });
+  });
+
+  itens.sort((a, z) => z.dias - a.dias);
+
+  let totOrig = 0;
+  let totAtu = 0;
+  const linhas = itens.map((it) => {
+    totOrig += it.original;
+    totAtu += it.atualizado;
+    return [
+      it.unidade, it.condomino, it.referencia,
+      fmtData(it.vencimento), `${it.dias} dia(s)`,
+      fmtMoeda(it.original), fmtMoeda(it.atualizado),
+    ];
+  });
+
+  abrirRelatorio('Relatório de Inadimplência', condominioContextoNome(),
+    ['Unidade', 'Condômino', 'Referência', 'Vencimento', 'Atraso', 'Valor original', 'Valor atualizado'],
+    linhas,
+    `Total original: ${fmtMoeda(totOrig)} · Total atualizado: ${fmtMoeda(totAtu)}`,
+    'inadimplencia');
 }
 
 // -------------------------------------------------------------
