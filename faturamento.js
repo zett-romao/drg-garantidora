@@ -76,6 +76,9 @@ function renderFaturamento() {
         .join('');
 
       document.getElementById('ctx-conteudo').innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+          <button class="btn btn-secondary" onclick="relatorioFaturamento()">Relatório</button>
+        </div>
         <div class="card">
           <div style="display:flex;gap:14px;flex-wrap:wrap;">
             <div class="form-group" style="max-width:220px;margin-bottom:4px;">
@@ -195,6 +198,35 @@ async function cancelarBoletoFat(docId, asaasPaymentId) {
   } catch (err) {
     alert('Falha ao cancelar: ' + (err.message || err));
   }
+}
+
+function relatorioFaturamento() {
+  const ctx = fatBolCtx;
+  if (!ctx) return;
+  const filtro = (($('fat-filtro') || {}).value) || 'todos';
+  const tipo = (($('fat-tipo') || {}).value) || 'todos';
+  const compFiltro = (($('fat-comp') || {}).value) || 'todas';
+  const lista = ctx.boletos.filter((b) => {
+    if (filtro !== 'todos' && fatSituacao(b) !== filtro) return false;
+    if (tipo === 'cota' && b.tipo === 'honorario') return false;
+    if (tipo === 'honorario' && b.tipo !== 'honorario') return false;
+    if (compFiltro !== 'todas' && b.competenciaId !== compFiltro) return false;
+    return true;
+  }).sort((a, z) => String(z.vencimento || '').localeCompare(String(a.vencimento || '')));
+  const rotSit = { aberto: 'Em aberto', vencido: 'Vencido', pago: 'Pago', cancelado: 'Cancelado' };
+  let total = 0;
+  const linhas = lista.map((b) => {
+    total += Number(b.valor) || 0;
+    const destino = b.tipo === 'honorario'
+      ? 'Honorários — condomínio'
+      : ((ctx.uni[b.unidadeId] || {}).identificacao || '—');
+    const compTxt = (b.competenciaId && ctx.comp[b.competenciaId])
+      ? rotuloCompetencia(ctx.comp[b.competenciaId]) : '—';
+    return [compTxt, destino, fmtData(b.vencimento), fmtMoeda(b.valor), rotSit[fatSituacao(b)] || '—'];
+  });
+  abrirRelatorio('Relatório de Faturamento & Boletos', condominioContextoNome(),
+    ['Competência', 'Destino', 'Vencimento', 'Valor', 'Situação'], linhas,
+    `Total dos boletos listados: ${fmtMoeda(total)}`, 'faturamento');
 }
 
 SECTION_RENDERERS.faturamento = renderFaturamento;

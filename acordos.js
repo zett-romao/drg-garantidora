@@ -92,11 +92,12 @@ function renderTelaAcordos() {
          <tbody>${linhas}</tbody></table></div>`
     : '<div class="empty-state">Nenhum acordo registrado.</div>';
 
-  const novo = podeEditar('acordos')
-    ? `<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
-         <button class="btn btn-primary" onclick="abrirFormAcordo()">+ Novo acordo</button>
-       </div>`
+  const acEdit = podeEditar('acordos')
+    ? '<button class="btn btn-primary" onclick="abrirFormAcordo()">+ Novo acordo</button>'
     : '';
+  const novo = `<div style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:12px;">
+       <button class="btn btn-secondary" onclick="relatorioAcordos()">Relatório</button>${acEdit}
+     </div>`;
   document.getElementById('ctx-conteudo').innerHTML = `${novo}<div class="card">${tabela}</div>`;
 }
 
@@ -293,6 +294,26 @@ async function excluirAcordo(id) {
   } catch (err) {
     alert('Falha ao excluir: ' + (err.message || err));
   }
+}
+
+function relatorioAcordos() {
+  const ctx = acCtx;
+  if (!ctx) return;
+  const linhas = ctx.acordos.slice()
+    .sort((a, z) => String(z.dataAcordo || '').localeCompare(String(a.dataAcordo || '')))
+    .map((a) => [
+      acRotuloCondomino(a.condominoId),
+      a.tipo === 'judicial' ? 'Judicial' : 'Extrajudicial',
+      a.tipo === 'judicial' ? (a.numeroProcesso || '') : '',
+      a.tipo === 'judicial' ? (a.tribunal || '') : '',
+      fmtData(a.dataAcordo),
+      String((a.parcelas || []).length),
+      fmtMoeda(acTotalParcelas(a.parcelas)),
+      AC_SITUACOES[a.situacao] || 'Ativo',
+    ]);
+  abrirRelatorio('Relatório de Acordos', condominioContextoNome(),
+    ['Condômino', 'Tipo', 'Nº processo', 'Tribunal', 'Data', 'Parcelas', 'Valor total', 'Situação'],
+    linhas, '', 'acordos');
 }
 
 SECTION_RENDERERS.acordos = renderAcordos;
