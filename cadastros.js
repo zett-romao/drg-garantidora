@@ -578,6 +578,10 @@ function abrirFormUnidade(cid, id) {
       ${campo('Bloco / Torre', inputTexto('f-bloco', u.bloco))}
     </div>
     ${campo('Fração ideal', inputTexto('f-fracao', u.fracaoIdeal, 'placeholder="Ex: 0,0125 ou 1,25%"'))}
+    <div class="form-row">
+      ${campo('Matrícula do imóvel', inputTexto('f-matricula', u.matricula, 'placeholder="Matrícula no registro de imóveis"'))}
+      ${campo('Nº do IPTU', inputTexto('f-iptu', u.iptu, 'placeholder="Inscrição do IPTU"'))}
+    </div>
     <label class="check-linha"><input type="checkbox" id="f-ativa" ${u.ativa === false ? '' : 'checked'}> Unidade ativa</label>`;
   abrirModalForm(id ? 'Editar unidade' : 'Nova unidade', corpo, () => salvarUnidade(cid, id), 'Salvar unidade');
 }
@@ -590,6 +594,8 @@ async function salvarUnidade(cid, id) {
     identificacao,
     bloco: valId('f-bloco'),
     fracaoIdeal: valId('f-fracao'),
+    matricula: valId('f-matricula'),
+    iptu: valId('f-iptu'),
     ativa: valCheck('f-ativa'),
   };
 
