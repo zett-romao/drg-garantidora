@@ -367,11 +367,13 @@ async function renderCondominios() {
          <tbody>${linhas}</tbody></table></div>`
     : `<div class="empty-state">Nenhum condomínio cadastrado${podeEditar() ? ' — clique em “Novo condomínio”.' : '.'}</div>`;
 
-  const novoBtn = podeEditar()
-    ? `<div style="display:flex;gap:10px;flex-wrap:wrap;">
-         <button class="btn btn-secondary" onclick="navegarPara('importarIA')">Importar contrato (IA)</button>
-         <button class="btn btn-primary" onclick="abrirFormCondominio()">+ Novo condomínio</button>
-       </div>` : '';
+  const condEdit = podeEditar()
+    ? `<button class="btn btn-secondary" onclick="navegarPara('importarIA')">Importar contrato (IA)</button>
+       <button class="btn btn-primary" onclick="abrirFormCondominio()">+ Novo condomínio</button>`
+    : '';
+  const novoBtn = `<div style="display:flex;gap:10px;flex-wrap:wrap;">
+       <button class="btn btn-secondary" onclick="relatorioCondominios()">Relatório</button>${condEdit}
+     </div>`;
 
   content.innerHTML = `
     <div class="section-head">
@@ -591,6 +593,56 @@ function relatorioUnidades() {
   );
 }
 
+function relatorioCondominios() {
+  const linhas = Object.keys(cacheCondominios).map((id) => {
+    const c = cacheCondominios[id];
+    const e = c.endereco || {};
+    return [
+      c.nome || '',
+      c.cnpj ? maskCNPJ(c.cnpj) : '',
+      [e.cidade, e.uf].filter(Boolean).join('/'),
+      c.ativo === false ? 'Inativo' : 'Ativo',
+    ];
+  });
+  linhas.sort((a, z) => String(a[0]).localeCompare(String(z[0]), 'pt-BR'));
+  abrirRelatorio('Relatório de Condomínios', 'Todos os condomínios',
+    ['Condomínio', 'CNPJ', 'Cidade/UF', 'Status'], linhas, '', 'condominios');
+}
+
+function relatorioCondominos() {
+  const mapaUnid = {};
+  unidadesDoContexto.forEach((u) => { mapaUnid[u.id] = u.identificacao; });
+  const linhas = Object.keys(cacheCondominos).map((id) => {
+    const c = cacheCondominos[id];
+    return [
+      c.nome || '',
+      c.cpfCnpj ? maskCPFCNPJ(c.cpfCnpj) : '',
+      c.unidadeId ? (mapaUnid[c.unidadeId] || '') : '',
+      c.telefone ? maskTelefone(c.telefone) : '',
+      c.email || '',
+      rotuloTipoCondomino(c.tipo),
+    ];
+  });
+  linhas.sort((a, z) => String(a[0]).localeCompare(String(z[0]), 'pt-BR'));
+  abrirRelatorio('Relatório de Condôminos', condominioContextoNome(),
+    ['Nome', 'CPF/CNPJ', 'Unidade', 'Telefone', 'E-mail', 'Tipo'], linhas, '', 'condominos');
+}
+
+function relatorioContratos() {
+  const linhas = Object.keys(cacheContratos).map((id) => {
+    const c = cacheContratos[id];
+    return [
+      c.numero || '',
+      fmtData(c.vigenciaInicio),
+      fmtData(c.vigenciaFim),
+      c.taxaAdmPct != null ? c.taxaAdmPct + '%' : '',
+      rotuloStatusContrato(c.status),
+    ];
+  });
+  abrirRelatorio('Relatório de Contratos', condominioContextoNome(),
+    ['Número', 'Início vigência', 'Fim vigência', 'Taxa adm.', 'Status'], linhas, '', 'contratos');
+}
+
 function abrirFormUnidade(cid, id) {
   const u = id ? (cacheUnidades[id] || {}) : {};
   const corpo = `
@@ -690,13 +742,13 @@ function renderCondominos() {
            <tbody>${linhas}</tbody></table></div>`
       : `<div class="empty-state">Nenhum condômino cadastrado.</div>`;
 
-    const novo = podeEditar()
-      ? `<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:12px;">
-           <button class="btn btn-secondary" onclick="navegarPara('importarPlanilha')">Importar planilha (IA)</button>
-           <button class="btn btn-primary" onclick="abrirFormCondomino('${cid}')">+ Novo condômino</button>
-         </div>`
+    const cEdit = podeEditar()
+      ? `<button class="btn btn-secondary" onclick="navegarPara('importarPlanilha')">Importar planilha (IA)</button>
+         <button class="btn btn-primary" onclick="abrirFormCondomino('${cid}')">+ Novo condômino</button>`
       : '';
-    document.getElementById('ctx-conteudo').innerHTML = `${novo}<div class="card">${tabela}</div>`;
+    const cBarra = `<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:12px;">
+      <button class="btn btn-secondary" onclick="relatorioCondominos()">Relatório</button>${cEdit}</div>`;
+    document.getElementById('ctx-conteudo').innerHTML = `${cBarra}<div class="card">${tabela}</div>`;
   });
 }
 
@@ -812,13 +864,13 @@ function renderContratos() {
            <tbody>${linhas}</tbody></table></div>`
       : `<div class="empty-state">Nenhum contrato cadastrado.</div>`;
 
-    const novo = podeEditar()
-      ? `<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:12px;">
-           <button class="btn btn-secondary" onclick="navegarPara('importarIA')">Importar contrato (IA)</button>
-           <button class="btn btn-primary" onclick="abrirFormContrato('${cid}')">+ Novo contrato</button>
-         </div>`
+    const ctEdit = podeEditar()
+      ? `<button class="btn btn-secondary" onclick="navegarPara('importarIA')">Importar contrato (IA)</button>
+         <button class="btn btn-primary" onclick="abrirFormContrato('${cid}')">+ Novo contrato</button>`
       : '';
-    document.getElementById('ctx-conteudo').innerHTML = `${novo}<div class="card">${tabela}</div>`;
+    const ctBarra = `<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:12px;">
+      <button class="btn btn-secondary" onclick="relatorioContratos()">Relatório</button>${ctEdit}</div>`;
+    document.getElementById('ctx-conteudo').innerHTML = `${ctBarra}<div class="card">${tabela}</div>`;
   });
 }
 
