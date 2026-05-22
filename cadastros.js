@@ -560,14 +560,35 @@ function renderUnidades() {
            <tbody>${linhas}</tbody></table></div>`
       : `<div class="empty-state">Nenhuma unidade cadastrada.</div>`;
 
-    const novo = podeEditar()
-      ? `<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:12px;">
-           <button class="btn btn-secondary" onclick="navegarPara('importarPlanilha')">Importar planilha (IA)</button>
-           <button class="btn btn-primary" onclick="abrirFormUnidade('${cid}')">+ Nova unidade</button>
-         </div>`
+    const btnsEditar = podeEditar()
+      ? `<button class="btn btn-secondary" onclick="navegarPara('importarPlanilha')">Importar planilha (IA)</button>
+         <button class="btn btn-primary" onclick="abrirFormUnidade('${cid}')">+ Nova unidade</button>`
       : '';
-    document.getElementById('ctx-conteudo').innerHTML = `${novo}<div class="card">${tabela}</div>`;
+    const barra = `<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:12px;">
+      <button class="btn btn-secondary" onclick="relatorioUnidades()">Relatório</button>${btnsEditar}</div>`;
+    document.getElementById('ctx-conteudo').innerHTML = `${barra}<div class="card">${tabela}</div>`;
   });
+}
+
+function relatorioUnidades() {
+  const linhas = Object.keys(cacheUnidades).map((id) => {
+    const u = cacheUnidades[id];
+    return [
+      u.identificacao || '',
+      u.bloco || '',
+      u.fracaoIdeal || '',
+      u.matricula || '',
+      u.iptu || '',
+      u.ativa === false ? 'Inativa' : 'Ativa',
+    ];
+  });
+  linhas.sort((a, z) => String(a[0]).localeCompare(String(z[0]), 'pt-BR'));
+  abrirRelatorio(
+    'Relatório de Unidades',
+    condominioContextoNome(),
+    ['Identificação', 'Bloco / Torre', 'Fração ideal', 'Matrícula', 'Nº do IPTU', 'Status'],
+    linhas, '', 'unidades',
+  );
 }
 
 function abrirFormUnidade(cid, id) {
