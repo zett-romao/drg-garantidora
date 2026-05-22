@@ -244,7 +244,7 @@ function json(body, status, origin) {
 async function chamarGemini(parts, env) {
   const body = {
     contents: [{ role: 'user', parts }],
-    generationConfig: { responseMimeType: 'application/json', temperature: 0.1, maxOutputTokens: 8192 },
+    generationConfig: { responseMimeType: 'application/json', temperature: 0.1, maxOutputTokens: 65536 },
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
   const res = await fetch(url, {
